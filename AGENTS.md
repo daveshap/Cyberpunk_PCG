@@ -21,7 +21,10 @@ geometry, textures and lighting are all generated.
   `landmark`, `a:<archetype>` (the tallest of an archetype), `holo:<i>`, `mega:<i>` (an ad wall), `rholo:<i>`
   (a rooftop hologram), `incident:<i>`, `fly:<kind>:<i>[:back:side:up]` (rides along with a flyer), and any view
   with `@screen=N` appended forces every LED screen to scene N. `harbour` looks at the waterfront skyline from
-  the water; pair it with `--extra "fov=28"` (the lens) for the photo comp. See `docs/COMPS.md`.
+  the water; pair it with `--extra "fov=28"` (the lens) for the photo comp. See `docs/COMPS.md`. Material
+  close-ups: `wall:<style>` (24 m), `close:<style>` (7 m, low on the wall; styles glass, panel, grid, shop,
+  balcony, metal, raw, lux), `kerb`, `roofs:<district kind>`; add `--extra "fill=0.5"` for a flat white fill
+  light, and `--perf N` to print the ms per frame of each view.
 - `node scripts/wgsl-check.mjs` captures every WGSL module the app compiles and flags values read outside the
   `if` branch that computed them (see the TSL gotchas). Run it after touching a material with `If()`.
 - `npm run artifact` writes one self-contained HTML fragment to `dist-artifact/index.html` (`--page` also
@@ -52,7 +55,13 @@ geometry, textures and lighting are all generated.
    a lane position node. Lights that also exist as kit geometry fade their sprite up close.
 7. Media facades: `core/media.ts` marks tall tiers `facade.media = 'outline' | 'show'` (keyed by building seed);
    the renderer passes it in `aF4.w` and the facade shader draws the LED lines. Show towers all run one clock.
-8. City light is baked on the CPU into a **2D atlas of 32 height layers** (`TEX.vol`, sampled by
+8. Materials are procedural layers (`render/surface.ts`: noise with analytic derivatives, filtered fbm,
+   cellular noise, joints and bonds that keep their average coverage below a pixel, streaks, graffiti
+   letters, `shadeN` for relief). Facade walls are built in `render/wallmat.ts` (a substrate per style,
+   then weathering). Take `fwidth` at the top of a material and pass the pixel footprint (`mpp`, metres
+   per pixel) down; every pattern fades to its average before it can alias. Keep weathering scaled by the
+   facade's grime and subtle.
+9. City light is baked on the CPU into a **2D atlas of 32 height layers** (`TEX.vol`, sampled by
    `volSample` in `render/tsl.ts`), a 1024² ground map and a district zone map. Do not use 3D textures: they
    fail to upload on some WebGPU implementations (the page renders black).
 
@@ -79,7 +88,7 @@ geometry, textures and lighting are all generated.
 
 ## Look rules
 
-See `docs/ART_BIBLE.md` and the comp notes in `docs/COMPS.md`. In short: each district must read as itself from the air and from the street
+See `docs/ART_BIBLE.md` (including its Materials section) and the comp notes in `docs/COMPS.md`. In short: each district must read as itself from the air and from the street
 (fog tint, sky glow, palette, massing, signage density and type). Neon should pop against darker walls, so
 when a scene washes out, lower light spill before you raise anything else. Distance gets darker, never
 brighter: the haze's ambient terms must stay under the dark walls and the night sky. Keep names, logos and glyphs

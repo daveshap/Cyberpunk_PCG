@@ -14,6 +14,11 @@ dark with distance. Lamps, aviation beacons and the head and tail lights of the 
 points of light out to the horizon. Tall towers carry LED media facades, and the tallest on the waterfront
 run one synchronised light show.
 
+Every surface is procedural too, and weathered the way real ones are (see **Materials** below): mosaic
+tile, render, brick, cast concrete, cladding, corrugated metal and stone walls with streaks under every
+sill, damp at the foot, rust, cracks, posters and graffiti; membrane, gravel and paver roofs; asphalt with
+cracks, cuts, oil and gutters; worn pavers and kerbs.
+
 The city is built the way Unreal's PCG / City Sample builds one: a **zone graph** decides where each
 district goes, and each district's **attribute table** drives everything downstream. That covers street
 grids, lots, building archetypes, facades, signage, clutter, light, fog and the sky glow. A second,
@@ -103,6 +108,35 @@ lines on the slope; overhangs get soffits with downlights.
   highways and the sprawl's through roads, all drawn as point lights that stay visible to the horizon.
   The hover cars in the air lanes carry head and tail lights too.
 
+## Materials
+
+There are no texture files: every surface is a stack of procedural layers, the way Night City's
+"multilayered" materials stack tiling surfaces through masks, with the weathering where water, sun and hands
+put it (`src/render/surface.ts`, `src/render/wallmat.ts`).
+
+- **Walls**: per facade style and building, small glazed mosaic tiles, painted render with a stucco grain
+  that peels where it stays wet, brick, cast concrete (formwork panels or boards, tie holes, bugholes, lift
+  lines), cladding panels with joints and fixings, corrugated sheet with laps and rust, polished or honed
+  stone. Then streaks from every sill (strongest at the ends) and from the roof edge, air conditioner
+  drips, damp and splash at the foot with a salt tide line, dirty corners, sun fade on the south side,
+  patch repairs, cracks from window corners, moss along the wet streaks, and posters and graffiti
+  (letters from the sign atlas) at street level in grimy blocks. Windows get frames, lit reveals, dirty
+  glass and a slightly different tilt per pane, so reflections break up pane by pane.
+- **Roofs**: bitumen membrane with lapped seams and patches, gravel ballast, pavers or a pale coating;
+  dirt along the parapet, dry rings where water ponds (puddles in the rain), drains, moss and soot.
+- **Ground**: asphalt grain, a crack network sealed with tar in places, utility cuts, oil down the lane
+  centres, polished wheel paths, a gutter that collects grit and water, grates and manhole covers, worn and
+  chipped markings; pavers with stains, gum, cracks and sunken ones, tactile pads at the corners, kerb
+  stones; cast-concrete lots with joints and oil; a seawall with tide bands and rust runs.
+- **Kits and vehicles**: paint worn off the edges, rust blooming from edges and feet, streaks down the
+  sides, dust on top, galvanised metal, leaf clumps on trees; the hover car has panel gaps, a pinstripe,
+  road grime and rain beads; flyers have panel lines and grime.
+
+Detail finer than about two pixels fades to its average, so nothing sparkles from the air. At night the
+materials show where light falls: relief is shaded against the likely light (the street below for walls,
+the nearest lamp for the ground), street light pools light the foot of walls, and lit windows light their
+reveals and the wall round them. `?fill=0.5` adds a flat white fill light to inspect materials.
+
 ## Dials
 
 **Style** (whole city; each axis is one of the genre's visual eras, see `docs/ART_BIBLE.md`)
@@ -140,7 +174,7 @@ Rust belt, Gilded coast.
 `ssr` / `nossr`, `auto` (start in guided flight), `fog`, `rain`, `neon`, `exposure`, `dry`, `tm=agx`, and for
 screenshots and debugging: `still`, `nohud`, `notaa`, `debug=fog|depth`, `hdbg=tmax|zone|light`,
 `hide=name,prefix*`, `holot` (freeze the holograms at a clock time), `screen=N` (force every LED screen to one
-scene), `lightgain` (scale the baked city light).
+scene), `lightgain` (scale the baked city light), `fill` (a flat white fill light to inspect materials).
 
 ## How it is built
 
@@ -164,7 +198,8 @@ generateCity(seed, dials)                      src/core (pure, deterministic, te
 buildCityRender(spec)                          src/render
   merged geometry per 480 m chunk and material, instanced kits, signs as glyph quads and SDF tubes,
   a baked light atlas (32 height layers) + ground light map + district zone map,
-  one facade shader (parallax windows into raymarched rooms, LOD to averages, sloped walls), wet ground,
+  one facade shader (parallax windows into raymarched rooms, LOD to averages, sloped walls),
+  procedural surfaces: per-style wall substrates and weathering, roofs, asphalt and pavers, worn kits,
   vertex-animated holograms and light pillars, instanced flyers and searchlight cones,
   point-light sprites (lamps, beacons, GPU-animated ground traffic) that keep their light with distance,
   post: volumetric haze (raymarched, district-tinted, analytic far tail), screen-space reflections,

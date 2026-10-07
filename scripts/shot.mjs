@@ -3,8 +3,10 @@
 // Views: spawn (chase camera), aerial, skyline, top, s:<district kind> (street level inside it),
 // d:<district kind> (above and outside a district, looking at it), strip, res, park, metro, landmark,
 // a:<archetype>, holo:<i>, mega:<i>, rholo:<i>, incident:<i>, fly:<kind>:<i>[:back:side:up], and pose
-// (with --pose "x,y,z,yaw,pitch"), harbour (from the water at the waterfront skyline). Append @screen=N to a view to force the LED screens to scene N.
-// Flags: --w --h --seed --extra "k=v&..." --frames N --url --backend gl|gpu --dom 1 --hud 1
+// (with --pose "x,y,z,yaw,pitch"), harbour (from the water at the waterfront skyline), and material close-ups:
+// wall:<style>, close:<style> (facade styles glass, panel, grid, shop, balcony, metal, raw, lux), kerb, roofs:<district kind>.
+// Append @screen=N to a view to force the LED screens to scene N. Add --extra "fill=0.5" for a flat white fill light.
+// Flags: --w --h --seed --extra "k=v&..." --frames N --url --backend gl|gpu --dom 1 --hud 1 --perf N (ms per frame)
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -260,6 +262,61 @@ const poses = await page.evaluate(() => {
       out['holo:' + i] = [px, py, pz, Math.atan2(-(cx - px), -(cz - pz)), Math.atan2(cy - py, D)];
     });
   }
+  // material close-ups: wall:<style> faces a long wall of that facade style from ~24 m,
+  // close:<style> from ~7 m low on the wall, kerb looks down a sidewalk and kerb, and
+  // roofs:<kind> looks down over the roofs of a district from ~70 m above them
+  const wallView = (style, D, yOf, skip = 0) => {
+    let seen = 0;
+    for (const b of s.buildings) {
+      for (const t of b.tiers) {
+        if (t.facade.style !== style || t.top || t.y1 - t.y0 < 8) continue;
+        const n = t.poly.length;
+        for (let i = 0; i < n; i++) {
+          const a = t.poly[i];
+          const q = t.poly[(i + 1) % n];
+          const dx = q[0] - a[0];
+          const dz = q[1] - a[1];
+          const len = Math.hypot(dx, dz);
+          if (len < 14) continue;
+          const nx = dz / len;
+          const nz = -dx / len;
+          const mx = (a[0] + q[0]) / 2;
+          const mz = (a[1] + q[1]) / 2;
+          const y = Math.min(t.y1 - 2, Math.max(t.y0 + 1.7, yOf(t)));
+          const p = { x: mx + nx * D, y, z: mz + nz * D };
+          if (world && world.blocked && world.blocked(p, 1.5)) continue;
+          const hit = world && world.raycast ? world.raycast(p, -nx, 0, -nz, D + 3) : null;
+          if (hit !== null && hit !== undefined && hit < D - 1.5) continue;
+          if (seen++ < skip) continue;
+          return [p.x, p.y, p.z, Math.atan2(nx, nz), 0];
+        }
+      }
+    }
+    return null;
+  };
+  for (const st of ['glass', 'panel', 'grid', 'shop', 'balcony', 'metal', 'raw', 'lux']) {
+    const w = wallView(st, 24, (t) => t.y0 + Math.min(16, (t.y1 - t.y0) * 0.45));
+    if (w) out['wall:' + st] = w;
+    const c = wallView(st, 7, (t) => t.y0 + 3.2, 1);
+    if (c) out['close:' + st] = c;
+  }
+  {
+    const st = s.streets.find((x) => x.kind === 'local' && x.hi - x.lo > 120 && s.districts[x.district] && s.districts[x.district].kind === 'cnmarket') ?? s.streets.find((x) => x.kind === 'local' && x.hi - x.lo > 120);
+    if (st) {
+      const along = st.lo + 30;
+      const off = -(st.road / 2) - 1.6;
+      out.kerb = st.axis === 'x' ? [along, 1.8, st.pos + off, -Math.PI / 2 - 0.3, -0.36] : [st.pos + off, 1.8, along, Math.PI + 0.3, -0.36];
+    }
+  }
+  for (const d of s.districts) {
+    const key = 'roofs:' + d.kind;
+    if (out[key]) continue;
+    const h = hAround(d.x, d.z, 120);
+    const px = d.x + 110;
+    const pz = d.z + 110;
+    const y = Math.max(60, h + 70);
+    out[key] = [px, y, pz, Math.atan2(-(d.x - px), -(d.z - pz)), -0.62];
+  }
   for (const k of Object.keys(out)) out[k] = Array.from(out[k]);
   return out;
 });
@@ -289,6 +346,18 @@ for (const raw of views) {
       continue;
     }
     await page.evaluate(([p, n]) => window.__game.settle(n, window.__game.backend === 'WebGPU' ? 80 : 0, p), [poses[v], frames]);
+    if (opt('perf')) {
+      // rough shader cost: ms per frame over N frames, synced by reading the frame back
+      const ms = await page.evaluate(async ([p, n]) => {
+        const g = window.__game;
+        await g.capture();
+        const t0 = performance.now();
+        await g.settle(n, 0, p);
+        await g.capture();
+        return (performance.now() - t0) / n;
+      }, [poses[v], Number(opt('perf'))]);
+      console.log('perf', raw, ms.toFixed(1), 'ms/frame');
+    }
   }
   if (opt('dom')) {
     // page screenshot (includes the HUD and the zoning deck)
