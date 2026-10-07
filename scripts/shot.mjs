@@ -3,7 +3,7 @@
 // Views: spawn (chase camera), aerial, skyline, top, s:<district kind> (street level inside it),
 // d:<district kind> (above and outside a district, looking at it), strip, res, park, metro, landmark,
 // a:<archetype>, holo:<i>, mega:<i>, rholo:<i>, incident:<i>, fly:<kind>:<i>[:back:side:up], and pose
-// (with --pose "x,y,z,yaw,pitch"). Append @screen=N to a view to force the LED screens to scene N.
+// (with --pose "x,y,z,yaw,pitch"), harbour (from the water at the waterfront skyline). Append @screen=N to a view to force the LED screens to scene N.
 // Flags: --w --h --seed --extra "k=v&..." --frames N --url --backend gl|gpu --dom 1 --hud 1
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
@@ -87,6 +87,15 @@ const poses = await page.evaluate(() => {
   out.aerial = [b.x0 + (b.x1 - b.x0) * 0.15, 420, b.z1 + 200, -0.62, -0.32];
   out.skyline = [b.x0 - 300, 120, (b.z0 + b.z1) / 2, -Math.PI / 2, 0.03];
   out.top = [(b.x0 + b.x1) / 2, 1500, (b.z0 + b.z1) / 2 + 900, 0, -1.0];
+  // harbour: out on the water looking north at the waterfront skyline (the classic
+  // night skyline photo across a river or harbour); aimed at the tallest tower near the shore
+  {
+    const cz = (x) => s.coast.z[Math.max(0, Math.min(s.coast.z.length - 1, Math.round((x - s.coast.x0) / s.coast.step)))];
+    const front = s.buildings.filter((q) => { const x = (q.rect.x0 + q.rect.x1) / 2; const z = (q.rect.z0 + q.rect.z1) / 2; return cz(x) - z > 0 && cz(x) - z < 700; });
+    const tallest = front.sort((p, q) => q.height - p.height)[0];
+    const hx = tallest ? (tallest.rect.x0 + tallest.rect.x1) / 2 : (b.x0 + b.x1) / 2;
+    out.harbour = [hx, 22, cz(hx) + 900, 0, 0.1];
+  }
   const world = g.flight && g.flight.world;
   const hAround = (x, z, r) => (world && world.heightAround ? world.heightAround(x, z, r) : 60);
   for (const d of s.districts) {
