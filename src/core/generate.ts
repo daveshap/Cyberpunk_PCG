@@ -20,6 +20,7 @@ import { makeTransit, transitBoxes, transitDressing } from './transit';
 import { makeSkybridges } from './skybridges';
 import { makeSpectacle } from './spectacle';
 import { makeFlyers } from './flyers';
+import { assignMedia } from './media';
 
 export function generateCity(options: CityOptions = {}, now: () => number = () => 0): CitySpec {
   const t0 = now();
@@ -47,6 +48,8 @@ export function generateCity(options: CityOptions = {}, now: () => number = () =
   mark('massing');
   structures.push(...makeSkybridges(buildings, streets, roads, root.fork('bridges'), dials.alien));
   mark('skybridges');
+  assignMedia(buildings, zoning.districts, zoning.coastZ);
+  mark('media');
   const dressed = dress(zoning, buildings, lots, blocks, streets, roads, root.fork('dressing'), structures);
   mark('dressing');
   const spectacle = makeSpectacle(zoning, buildings, lots, root.fork('spectacle'));
@@ -112,6 +115,7 @@ export function generateCity(options: CityOptions = {}, now: () => number = () =
     highways,
     boxes,
     outskirts: outskirts.buildings,
+    outskirtsGrid: outskirts.grid,
     transit,
     spectacle: { holos: spectacle.holos, pillars: spectacle.pillars },
     flyers: { routes: flyers.routes, incidents: flyers.incidents },
