@@ -27,6 +27,18 @@ export interface Outskirts {
   buildings: OutskirtBuilding[];
   /** Outer extent of the ring. */
   extent: Rect;
+  /** The sprawl's street grid (for its lamps and traffic). */
+  grid: OutskirtGrid;
+}
+
+/** Street centre lines of the sprawl. Lines inside `inner` (the city plus its ring road) carry no street. */
+export interface OutskirtGrid {
+  xs: number[];
+  zs: number[];
+  inner: Rect;
+  extent: Rect;
+  coastWest: number;
+  coastEast: number;
 }
 
 const STYLES: readonly FacadeStyle[] = ['grid', 'balcony', 'panel', 'raw', 'metal', 'shop'];
@@ -150,5 +162,5 @@ export function makeOutskirts(rng: Rng, bounds: Rect, coastWest: number, coastEa
       }
     }
   }
-  return { buildings: out, extent };
+  return { buildings: out, extent, grid: { xs, zs, inner: { x0: X0, z0: Z0, x1: X1, z1: extent.z1 }, extent, coastWest, coastEast } };
 }

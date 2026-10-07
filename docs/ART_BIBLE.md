@@ -62,15 +62,37 @@ parks and lit windows.
 
 ## Rendering rules
 
-- Neon has to pop against darker walls. When a scene washes out, lower the light spill or the haze
-  scatter before you touch the emissive levels.
+These came out of the comp pass (`docs/COMPS.md`): real night photos of Chongqing, Hong Kong and Tokyo, and
+the night cities of Akira, Ghost in the Shell and Night City all agree on them.
+
+- **The frame lives in the dark.** Blacks stay black (no lifted, tinted shadows); most of the frame is near
+  black and the light comes from sources: windows, signs, lamps, screens, traffic. Neon has to pop against
+  darker walls. When a scene washes out, lower the light spill or the haze scatter before you touch the
+  emissive levels.
+- **Walls are lit by what is near them, not washed.** The light volume is coarse (13 m), so its spill on walls
+  is low and knee'd, and rough surfaces do not mirror it at grazing angles. Streets keep their full response
+  to the fine ground map: pools of lamp and shop light are what draw the grid from the air.
+- **Distance gets darker, not brighter.** A long ray through haze settles at the haze's ambient brightness, so
+  that ambient must stay under the dark walls and the night sky; the haze only glows where city light
+  actually is. The sky is dark with a thin, dim, desaturated band of light pollution low on the horizon.
+  Far away you see the city's lights through dark air, not a lit fog. Ground never ends at a visible edge.
+- **Lights stay points.** Anything the eye sees as a point (street and highway lamps, the promenade, the
+  sprawl's street lights, aviation beacons on towers, masts, stacks and cranes, head and tail lights) is a
+  sprite that never shrinks under ~1 px and keeps its light as it does, so a far street is a string of fine
+  points, a far district a dense carpet, and the air between stays dark.
+- **Traffic is light.** Two-way streams on arterials, highways and the sprawl's through roads: white heads
+  toward you, red tails away. From above they trace the grid; from the street they move.
 - Windows are never flat paint up close. They show a room (parallax), curtains with folds or blinds, and a mix
-  of warm, neutral and cool light, plus the odd tinted room. Far away they average out without sparkle.
-- Distance gets darker, not brighter. The haze only glows where city light actually is; far away you see the
-  city's lights through dark air, not a lit fog. Ground should never end at a visible edge.
-- Far facades average to a low glow so towers read as dark masses scattered with light; up close every
-  window is a room. Light lines on stacked plates go on the crown plate only, or the tower stripes white.
+  of warm, neutral and cool light, plus the odd tinted room. When single windows merge, a floor becomes a
+  ribbon of light (lit and dark runs, the ceiling brighter than the desks); only when floors merge too does
+  the facade fall to a dim average with faint bands. Never a flat glow.
+- **LED lines.** Tall towers, more of them on the waterfront, carry LED lines on their floor slabs and
+  corners: warm, cool or gold outlines, and a city-wide light show on the tallest, which all run the same
+  scenes on one clock so the skyline moves together. Light lines on stacked plates otherwise go on the crown
+  plate only, or the tower stripes white.
 - Wet ground mirrors the city: screen-space reflections at high/ultra, the light volume and sky otherwise.
+- **Lens.** Flying uses a wide lens (66°); the skyline across the water reads best on a long one (28–30°),
+  which stacks the towers the way the photos do. `Z` cycles the lens, `?fov=` sets it.
 - All names, logos and glyphs are invented. No real brands, no game IP.
 
 ## Spectacle
