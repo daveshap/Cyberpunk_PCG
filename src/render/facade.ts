@@ -56,6 +56,7 @@ import {
 import { U, fresnel, hash12, hash13, lightAt, pin, shade, skyColor, vnoise } from './tsl';
 import { bond, cellular, fbmF, joints, lineAA, nightLightDir, shadeN, streakNoise, throwUp } from './surface';
 import { wallSurface } from './wallmat';
+import { localDiffuse } from './locallights';
 
 export const STYLE_ID = { glass: 0, panel: 1, grid: 2, shop: 3, balcony: 4, metal: 5, raw: 6, lux: 7 } as const;
 
@@ -277,6 +278,8 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const mpp = pin(max(fwidth(u), fwidth(v)).max(1e-4));
     const S = wallSurface({ u, v, vf, wy: wp.y, n, tng, mpp, near, base, fhE, bwE, sx0, sx1, sy0, sy1, inShop, cu, cv, fu, fv, style, seed, grime, tierH, wlen });
     const Ld = nightLightDir(n, wp);
+    // light from the signs, lamps and fires near this point, once for every layer here
+    const Eloc = pin(localDiffuse(wp, n), 'vec3');
 
     // ------------------------------------------------- windows
     const inAp = step(sx0, fu).mul(step(fu, sx1)).mul(step(sy0, fv)).mul(step(fv, sy1));
@@ -364,7 +367,7 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
 
     // compose the pane
     const pane = glassCol.mul(glassTint).add(glassEmit.mul(oneMinus(glassDirt.mul(0.2))).mul(oneMinus(boarded)).mul(oneMinus(voidWin))).add(refl).toVar();
-    pane.addAssign(shade(vec3(0.06, 0.055, 0.05), n, wp, float(0.0), float(1.0)).mul(glassDirt.mul(0.5)));
+    pane.addAssign(shade(vec3(0.06, 0.055, 0.05), n, wp, float(0.0), float(1.0), Eloc).mul(glassDirt.mul(0.5)));
     // frames: aluminium, white or dark, round each pane, a meeting rail on sliding windows
     // (homes), a transom on some, mullions across shop fronts; silhouetted against lit rooms
     const aaU = mpp.div(bwE);
@@ -381,15 +384,15 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const frameK = max(max(oneMinus(insideU.mul(insideV)), rail), max(transom, shopMull)).mul(hitGlass).mul(smoothstep(0.07, 0.03, mpp)).mul(step(0.5, style)).mul(oneMinus(boarded));
     const fh3 = hash12(vec2(seed.mul(4.4), 2.9));
     const frameAlb = select(fh3.lessThan(0.5), vec3(0.17, 0.175, 0.18), select(fh3.lessThan(0.8), vec3(0.3, 0.3, 0.29), vec3(0.04, 0.036, 0.032))).mul(oneMinus(grime.mul(0.4)));
-    const frameLit = shade(frameAlb, n, wp, float(0.35), float(0.4)).add(lc.mul(isLitE).mul(U.winGain).mul(0.025));
+    const frameLit = shade(frameAlb, n, wp, float(0.35), float(0.4), Eloc).add(lc.mul(isLitE).mul(U.winGain).mul(0.025));
     pane.assign(mix(pane, frameLit, frameK));
     pane.assign(mix(pane, vec3(0.006), voidWin));
     // boarded windows: weathered plywood sheets with grain and screw lines
     const plyGrain = vnoise(vec2(gu.mul(bwE).mul(1.5), gv.mul(fhE).mul(28.0)).add(h1.mul(30.0)));
     const plySheet = step(0.5, fract(gu.mul(bwE).div(1.2)));
     const plyC = vec3(0.24, 0.17, 0.1).mul(mix(0.75, 1.15, plyGrain)).mul(mix(0.85, 1.05, plySheet)).mul(oneMinus(grime.mul(0.45)));
-    pane.assign(mix(pane, shade(plyC, n, wp, float(0.02), float(0.9)), boarded));
-    pane.assign(mix(pane, shade(shutterC, n, wp, float(0.25), float(0.6)), shutter));
+    pane.assign(mix(pane, shade(plyC, n, wp, float(0.02), float(0.9), Eloc), boarded));
+    pane.assign(mix(pane, shade(shutterC, n, wp, float(0.25), float(0.6), Eloc), shutter));
 
     // ------------------------------------------------- compose wall + window
     // a lit window lights the wall round it a little, most of all the sill and the wall
@@ -398,9 +401,9 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const dWy = max(max(sy0.sub(fv), fv.sub(sy1)), float(0.0)).mul(fhE);
     const below = step(fv, sy0);
     const winSpill = exp(length(vec2(dWx, dWy)).negate().div(mix(0.22, 0.4, below))).mul(mix(0.45, 1.0, below)).mul(oneMinus(inAp)).mul(oneMinus(inShop.mul(0.5)));
-    const wallLit = shadeN(S.alb, n, S.nb, wp, S.spec, S.rough, S.cav, Ld).add(S.alb.mul(lc).mul(isLitE).mul(U.winGain).mul(0.05).mul(winSpill).mul(oneMinus(boarded)));
+    const wallLit = shadeN(S.alb, n, S.nb, wp, S.spec, S.rough, S.cav, Ld, Eloc).add(S.alb.mul(lc).mul(isLitE).mul(U.winGain).mul(0.05).mul(winSpill).mul(oneMinus(boarded)));
     // the reveal is lit by the room behind the glass
-    const recessC = shade(revealC, n, wp, float(0.02), float(1.0)).add(lc.mul(isLitE).mul(U.winGain).mul(0.05).mul(oneMinus(boarded)));
+    const recessC = shade(revealC, n, wp, float(0.02), float(1.0), Eloc).add(lc.mul(isLitE).mul(U.winGain).mul(0.05).mul(oneMinus(boarded)));
     const winMix = inAp.mul(oneMinus(fascia));
     const detailed = mix(wallLit, mix(recessC, pane, hitGlass), winMix);
     // far average: window fraction times average pane brightness
@@ -475,7 +478,7 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     // gold trims on lux
     If(style.greaterThan(6.5), () => {
       const trim = oneMinus(inAp).mul(step(sx0.sub(0.04), fu).mul(step(fu, sx1.add(0.04))).mul(step(sy0.sub(0.04), fv)).mul(step(fv, sy1.add(0.04))));
-      col.assign(mix(col, shade(vec3(0.6, 0.42, 0.16), n, wp, float(0.8), float(0.3)), trim.mul(detail)));
+      col.assign(mix(col, shade(vec3(0.6, 0.42, 0.16), n, wp, float(0.8), float(0.3), Eloc), trim.mul(detail)));
     });
     // ------------------------------------------------- LED media facades
     // (comps: Chongqing and Shanghai riverfronts, Hong Kong's harbour front) LED lines on
