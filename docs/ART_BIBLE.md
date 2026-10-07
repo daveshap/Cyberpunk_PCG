@@ -95,6 +95,46 @@ the night cities of Akira, Ghost in the Shell and Night City all agree on them.
   which stacks the towers the way the photos do. `Z` cycles the lens, `?fov=` sets it.
 - All names, logos and glyphs are invented. No real brands, no game IP.
 
+## Materials
+
+A surface that is one colour with a little noise reads as a PS2 game. Real surfaces are a substrate with a
+history: water runs down from every ledge, dirt splashes up the foot of a wall, paint fades on the sunny
+side and wears off edges, rust bleeds from every fixing, people stick posters where they walk. Night City
+builds its surfaces the same way, as tiling materials stacked through masks. Here every layer is
+procedural (`render/surface.ts`, `render/wallmat.ts`).
+
+- **Substrate first, per style and per building.** Grid, shop and balcony walls are glazed mosaic tile
+  (pastel or the building's colour, with a darker floor band on some), painted render, or brick. Raw walls
+  are cast concrete with formwork panels or boards, tie holes, bugholes and lift lines. Panels have joints,
+  fixings and a tone and bow each. Metal is corrugated sheet with laps and fixings. Lux is stone: marble,
+  travertine or granite, polished or honed. Curtain walls have spandrel glass and capped mullions.
+- **Weathering follows water, sun and people.** Streaks start under sills (strongest at the sill ends)
+  and at the roof edge and thin out as they run down. The foot of a wall is damp and splashed, with a salt
+  tide line on porous walls. Corners are dirtier. Paint fades on south faces and higher up. Rust starts at
+  the foot of metal sheets, along the laps and under fixings. Cracks start at window corners. Moss grows
+  along the wet streaks, not in blobs. Posters and graffiti stay at street level on grounded walls. Patches
+  are fresher than the wall round them.
+- **Subtle, and scaled by grime.** Every amount scales with the facade's grime; a clean district still
+  weathers a little. Overdone weathering is the usual failure: blotches and camouflage read worse than a
+  flat wall.
+- **Nothing sparkles.** Every pattern fades to its average once it is finer than about two pixels (joints
+  keep their average coverage, noise octaves fade to their mean, per-tile tones and tilts fade out).
+- **Light reveals the material.** Relief is shaded against the most likely night light (from the street
+  below on walls, toward the nearest lamp pool on the ground), the ground's light pools also light the foot
+  of walls, and lit windows light their reveals and the wall round them. Do not raise the general wall
+  spill to show materials; the dark walls are what makes the neon pop.
+- **Windows** have frames (aluminium, white or dark; a meeting rail on sliding windows, a transom on some,
+  mullions across shop fronts), dirty glass and a slightly different tilt per pane, so reflections break up
+  pane by pane. Boarded windows are weathered plywood; shutters are painted or bare, rusty at the foot,
+  and tagged in grimy blocks.
+- **Ground**: asphalt grain, sealed and open cracks, utility cuts, oil in the lane centres, polished wheel
+  paths, a gritty wet gutter, grates and manholes, worn markings; pavers with stains, gum, cracks and
+  sunken ones, tactile pads at the corners, kerb stones (painted along some blocks).
+- **Roofs**: membrane, gravel, pavers or a pale coating, with dirt along the parapet, ponding rings,
+  drains, moss and soot.
+- Posters are invented layouts (blocks and bars, no words); graffiti letters are random Latin letters
+  from the sign atlas. No real tags, brands or names.
+
 ## Spectacle
 
 - **Giant holograms** are projections, not solids: a faint fill, a hot fresnel rim, a construction grid,

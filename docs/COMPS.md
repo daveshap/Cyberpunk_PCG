@@ -82,6 +82,22 @@ node scripts/shot.mjs --views landmark,d:luxury,spawn --extra "q=high" --out sho
   beacons on tall roofs, masts, stacks and cranes, and ground and flying traffic, all as sprites that never
   shrink under ~1 px and keep their flux. The sky is darker, with a thin, desaturated pollution band.
 
+### Surfaces up close (the materials pass)
+
+- **What you see.** In Night City and in real night streets, walls are never one colour: water streaks
+  under every sill, dark damp at the foot of walls, rust bleeding from fixings, mismatched repairs,
+  posters and tags at street level, cracked and stained pavement, gutters full of grit and water.
+- **How.** Cyberpunk 2077's "multilayered" material stacks up to 20 tiling surfaces (concrete, painted
+  metal, rust, dirt) through masks, so one mesh carries a whole weathering history. Procedural
+  weathering tools build those masks from where water collects and runs, from edges (wear) and cavities
+  (dirt), and warn that overdoing it is the most common mistake.
+- **Now.** Every material is a procedural stack: a substrate per facade style and building, then
+  weathering masks driven by geometry the shader knows (sills, roof edge, the foot of the wall, corners,
+  laps, kit edges and tops), scaled by grime (see the Materials section of `docs/ART_BIBLE.md`). Relief is
+  shaded with analytic noise derivatives (no screen-space derivative blockiness).
+- **Still missing.** Geometry: everything is still a box at heart (no pipes, ledges or downpipes on the
+  walls, low-poly trees). Real sign light on the walls behind signs (the light volume is coarse).
+
 ## Distance: why the haze piled up
 
 A long ray through haze settles at the haze's ambient brightness (its in-scattered light), whatever is behind
@@ -118,3 +134,6 @@ to the far ground.
 - [Art Direction Summit: Building Night City](https://gdcvault.com/play/1027571/Art-Direction-Summit-Building-Night), GDC Vault
 - [Creating lighting and environments for Cyberpunk 2077](https://80.lv/articles/creating-lighting-and-environments-for-cyberpunk-2077/), 80.lv
 - [Aviation obstruction lighting](https://en.wikipedia.org/wiki/Aviation_obstruction_lighting), Wikipedia
+- [Multilayered: Cyberpunk's supershader](https://wiki.redmodding.org/cyberpunk-2077-modding/for-mod-creators-theory/materials/multilayered), REDmodding wiki
+- [Procedural damage for game assets](https://www.strayspark.studio/blog/procedural-damage-game-assets-complete-workflow), StraySpark
+- [Bump mapping unparametrized surfaces on the GPU](https://hgpu.org/?p=3263), M. Mikkelsen
