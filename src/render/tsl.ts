@@ -74,6 +74,8 @@ export const U = {
   res: uniform(new THREE.Vector2(1280, 720)),
   /** Debug: force every LED screen to one scene (-1 = run the programme). */
   screenScene: uniform(-1),
+  /** Debug: flat white fill light on every lit surface (?fill=0.5) to inspect materials. */
+  fill: uniform(0),
 };
 
 /**
@@ -364,7 +366,7 @@ export const shade = Fn(([albedo, n, p, spec, rough]) => {
   // sign street must not flood whole facades) and the contrast comes from the
   // emitters themselves (comps: Tokyo and Hong Kong side streets at night)
   const Lw = L.div(dot(L, vec3(0.3, 0.5, 0.2)).mul(0.8).add(1.0));
-  const diffuse = albedo.mul(amb.add(Lw.mul(0.17)).mul(ao));
+  const diffuse = albedo.mul(amb.add(Lw.mul(0.17)).add(U.fill).mul(ao));
   const V = normalize(cameraPosition.sub(p));
   const ndv = clamp(dot(n, V), 0.0, 1.0);
   const R = V.negate().sub(n.mul(dot(V.negate(), n).mul(2.0)));

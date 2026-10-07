@@ -48,6 +48,8 @@ async function main(): Promise<void> {
   if (q.has('screen')) U.screenScene.value = Number(q.get('screen'));
   // debug: scale the baked city light (?lightgain=0.3)
   if (q.has('lightgain')) U.lightGain.value = Number(q.get('lightgain'));
+  // debug: flat white fill light to inspect materials (?fill=0.5)
+  if (q.has('fill')) U.fill.value = Number(q.get('fill'));
   // freeze the giant holograms at a clock time (screenshots); still mode freezes them at 20 s by default
   if (q.has('holot') || still) freezeHolograms(Number(q.get('holot') ?? 20));
   let seed = q.get('seed') ?? 'sprawl';
