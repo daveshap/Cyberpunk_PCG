@@ -1,0 +1,37 @@
+{
+  "name": "neon-sprawl",
+  "version": "0.1.0",
+  "description": "Procedurally generated cyberpunk city with zoned districts, style dials and a flyable hover car (Three.js r186, WebGPU/WebGL2)",
+  "scripts": {
+    "test": "vitest run",
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview --port 4173",
+    "typecheck": "tsc --noEmit -p tsconfig.core.json",
+    "shot": "node scripts/shot.mjs",
+    "artifact": "node scripts/build-artifact.mjs"
+  },
+  "keywords": [
+    "procedural",
+    "city",
+    "threejs",
+    "webgpu",
+    "tsl",
+    "cyberpunk",
+    "neon"
+  ],
+  "author": "Dave Shapiro",
+  "license": "MIT",
+  "dependencies": {
+    "three": "^0.186.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "@types/three": "^0.186.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.1",
+    "vitest": "^5.0.2"
+  },
+  "type": "module",
+  "private": true
+}
