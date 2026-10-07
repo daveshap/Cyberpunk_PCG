@@ -27,6 +27,7 @@ import { buildSpectacle } from './spectacle';
 import { FlyersRender } from './flyers';
 import { Rain } from './rain';
 import { createSky } from './sky';
+import { PROMENADE_H, buildCityLights, promenade, type CityLights } from './lights';
 
 const CHUNK = 480;
 
@@ -105,9 +106,12 @@ class Chunks {
 
 const ROOF_CODE: Record<string, number> = { flat: 0, helipad: 1, garden: 2, crown: 3 };
 
+const MEDIA_CODE: Record<string, number> = { outline: 1, show: 2 };
+
 function addWalls(b: Building, B: MeshBuilder): void {
   for (const t of b.tiers) {
     const f = t.facade;
+    const media = MEDIA_CODE[f.media ?? ''] ?? 0;
     B.set('aF0', STYLE_ID[f.style], f.floorH, f.bayW, f.win);
     B.set('aF1', f.lit, f.warm, f.grime, f.seed);
     B.set('aF2', f.base[0], f.base[1], f.base[2], f.strips);
@@ -126,10 +130,10 @@ function addWalls(b: Building, B: MeshBuilder): void {
         const q2 = t.top[(i + 1) % n]!;
         const insA = (a2[0] - a[0]) * (-nz) + (a2[1] - a[1]) * nx;
         const insB = len - ((q2[0] - a[0]) * (-nz) + (q2[1] - a[1]) * nx);
-        B.set('aF4', 0, t.y1 - t.y0, (insA + insB) / 2 / Math.max(1e-3, t.y1 - t.y0), 0);
+        B.set('aF4', 0, t.y1 - t.y0, (insA + insB) / 2 / Math.max(1e-3, t.y1 - t.y0), media);
         addSlopedWall(B, a, q, a2, q2, t.y0, t.y1, nx, nz);
       } else {
-        B.set('aF4', t.shopEdges.includes(i) ? t.shopH : 0, t.y1 - t.y0, 0, 0);
+        B.set('aF4', t.shopEdges.includes(i) ? t.shopH : 0, t.y1 - t.y0, 0, media);
         addWall(B, a[0], a[1], q[0], q[1], t.y0, t.y1, nx, nz, t.y0);
       }
     }
@@ -270,6 +274,7 @@ export interface CityRender {
   rain: Rain;
   traffic: Traffic;
   flyers: FlyersRender;
+  lights: CityLights;
   update(camera: THREE.Camera, dt: number): void;
   dispose(): void;
   stats: { meshes: number; triangles: number; instances: number; buildMs: number; bakeMs: number };
@@ -337,6 +342,12 @@ export function buildCityRender(spec: CitySpec): CityRender {
   for (const k of spec.kits) {
     const c = convertKit(k);
     if (c) kits.add(c[0], c[1], c[2]);
+  }
+  // promenade lamps on the city's sea front, arms reaching back over the walk
+  for (const p of promenade(spec)) {
+    if (!p.inCity) continue;
+    const s = PROMENADE_H / 8;
+    kits.add('lamp', 'mid', { x: p.x, y: 0.15, z: p.z, rot: Math.PI, sx: s, sy: s, sz: s, emit: 2.5, r: 0.13, g: 0.13, b: 0.14, cs: CLS.metal + 0.5, er: 1, eg: 0.72, eb: 0.44, mode: 0 });
   }
 
   // ---- steam: road vents (grate + plume), barrel fires, industrial stacks
@@ -408,6 +419,10 @@ export function buildCityRender(spec: CitySpec): CityRender {
   const rain = new Rain();
   root.add(rain.mesh);
 
+  // ---- point lights: lamps, beacons, the sprawl, the promenade, ground and flying traffic
+  const lights = buildCityLights(spec, traffic.mesh.geometry as THREE.InstancedBufferGeometry);
+  root.add(lights.group);
+
   // ---- giant holograms and light pillars
   const spectacle = buildSpectacle(spec.spectacle);
   root.add(spectacle.group);
@@ -447,6 +462,7 @@ export function buildCityRender(spec: CitySpec): CityRender {
     rain,
     traffic,
     flyers,
+    lights,
     stats: { meshes, triangles, instances: kits.instanceCount, buildMs: performance.now() - t0, bakeMs: bake.ms },
     update(camera: THREE.Camera, dt: number): void {
       time += dt;
@@ -459,6 +475,7 @@ export function buildCityRender(spec: CitySpec): CityRender {
         e.mesh.visible = d < e.max && !e.mesh.userData.forceHidden;
       }
       traffic.update(dt);
+      lights.update(camera as THREE.PerspectiveCamera, dt);
       trains.update(dt);
       spectacle.update(dt);
       flyers.update(dt);
@@ -475,6 +492,7 @@ export function buildCityRender(spec: CitySpec): CityRender {
         if (m.isMesh && m !== sky) m.geometry.dispose();
       });
       traffic.dispose();
+      lights.dispose();
       trains.dispose();
       spectacle.dispose();
       flyers.dispose();
