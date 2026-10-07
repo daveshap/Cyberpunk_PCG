@@ -9,6 +9,11 @@ towers, sky discs, arches, slabs on stilts, skybridges), building-sized hologram
 landmark pyramid, serpents, jellyfish, mantas), columns of light on the tallest crowns, building-sized
 ad walls, and the official traffic: ad airships, police patrols, medevac flyers and cargo haulers.
 
+The night itself is tuned against reference photos and films (see `docs/COMPS.md`). The sky and the air go
+dark with distance. Lamps, aviation beacons and the head and tail lights of the street and air traffic stay
+points of light out to the horizon. Tall towers carry LED media facades, and the tallest on the waterfront
+run one synchronised light show.
+
 The city is built the way Unreal's PCG / City Sample builds one: a **zone graph** decides where each
 district goes, and each district's **attribute table** drives everything downstream. That covers street
 grids, lots, building archetypes, facades, signage, clutter, light, fog and the sky glow. A second,
@@ -20,7 +25,7 @@ city, and **per-district scalars** bias one district kind.
 ```bash
 npm install
 npm run dev            # http://localhost:5173
-npm test               # generator, megastructures, holograms, flyer routes, collision, flight
+npm test               # generator, megastructures, media facades, holograms, flyer routes, collision, flight
 npm run artifact       # one self-contained HTML file in dist-artifact/
 ```
 
@@ -40,6 +45,7 @@ same city with screen-space reflections off by default.
 | 1–7 | jump to a district |
 | T · G · M · H | rain · zoning deck · map · HUD |
 | R | back to the start |
+| Z | lens: 66° → 45° → 30° → 20° (a long lens stacks the skyline like the photo comps) |
 | Wheel | camera distance |
 | Map click | fly there. Click the legend to switch the map between districts and land use. |
 
@@ -89,6 +95,13 @@ lines on the slope; overhangs get soffits with downlights.
 - **Flyers**: ad airships with LED flanks and floodlights over the skyline, police units with red and blue
   light bars patrolling the arterials and ringing street incidents with searchlights, teal and white medevac
   flyers, and cargo haulers on the low bands.
+- **Media facades**: LED lines on the floor slabs and corners of tall towers, more of them on the
+  waterfront. Most are steady warm, cool or gold outlines; the tallest join a city-wide show of four
+  scenes on one clock (bands climbing, a wave along the shore, a rainbow scroll, sparkle).
+- **City lights**: street and highway lamps, a promenade along the sea, the sprawl's street grid, red
+  aviation beacons on towers, masts, stacks and cranes, and two-way ground traffic on the arterials,
+  highways and the sprawl's through roads, all drawn as point lights that stay visible to the horizon.
+  The hover cars in the air lanes carry head and tail lights too.
 
 ## Dials
 
@@ -123,7 +136,7 @@ Rust belt, Gilded coast.
 
 ## URL parameters
 
-`seed`, `preset` (e.g. `night-strip`), `size`, `alien`, `q` (`low|medium|high|ultra`), `gl` (force WebGL2),
+`seed`, `preset` (e.g. `night-strip`), `size`, `alien`, `q` (`low|medium|high|ultra`), `fov` (lens, vertical degrees), `gl` (force WebGL2),
 `ssr` / `nossr`, `auto` (start in guided flight), `fog`, `rain`, `neon`, `exposure`, `dry`, `tm=agx`, and for
 screenshots and debugging: `still`, `nohud`, `notaa`, `debug=fog|depth`, `hdbg=tmax|zone|light`,
 `hide=name,prefix*`, `holot` (freeze the holograms at a clock time), `screen=N` (force every LED screen to one
@@ -139,11 +152,12 @@ generateCity(seed, dials)                      src/core (pure, deterministic, te
   lots        recursive splits sized by district and tuning; whole blocks kept for megastructures
   massing     23 archetype grammars -> convex tiers (sloped tiers carry a top polygon, overhangs a soffit)
   skybridges  enclosed bridges between tall neighbours across local streets
+  media       LED outlines and the waterfront light show on tall towers
   dressing    signs by culture and use, ad walls, rooftop holograms, AC units, laundry, lamps, emitters
   spectacle   giant hologram circuits fitted to the skyline, light pillars
   transit     elevated metro loop with stations, subway kiosks
   traffic     air lanes and highway decks; airship, police, medevac and hauler routes, police incidents
-  outskirts   a ring of plain blocks to the horizon
+  outskirts   a ring of plain blocks and its street grid to the horizon
   collision   boxes for the flight
         |
         v  CitySpec (plain JSON)
@@ -152,6 +166,7 @@ buildCityRender(spec)                          src/render
   a baked light atlas (32 height layers) + ground light map + district zone map,
   one facade shader (parallax windows into raymarched rooms, LOD to averages, sloped walls), wet ground,
   vertex-animated holograms and light pillars, instanced flyers and searchlight cones,
+  point-light sprites (lamps, beacons, GPU-animated ground traffic) that keep their light with distance,
   post: volumetric haze (raymarched, district-tinted, analytic far tail), screen-space reflections,
   neon glow layer, TRAA, bloom, grade, chromatic edge, vignette, grain
 ```
