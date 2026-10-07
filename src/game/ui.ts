@@ -244,7 +244,7 @@ export class Ui {
     this.help = el(
       'div',
       'ns-help',
-      '<i>Mouse</i><span>steer (drag if not captured)</span><i>W / S</i><span>thrust / brake</span><i>A / D</i><span>strafe</span><i>Space / C</i><span>climb / dive</span><i>Shift</i><span>boost</span><i>F</i><span>guided flight</span><i>1-7</i><span>jump to district</span><i>T  G  M  H</i><span>rain, deck, map, hud</span><i>Wheel</i><span>camera distance</span>',
+      '<i>Mouse</i><span>steer (drag if not captured)</span><i>W / S</i><span>thrust / brake</span><i>A / D</i><span>strafe</span><i>Space / C</i><span>climb / dive</span><i>Shift</i><span>boost</span><i>F</i><span>guided flight</span><i>1-7</i><span>jump to district</span><i>T  G  M  H</i><span>rain, deck, map, hud</span><i>Wheel</i><span>camera distance</span><i>Z</i><span>lens</span>',
     );
     this.stats = el('div', 'ns-stats', '');
 
