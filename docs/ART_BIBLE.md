@@ -135,6 +135,26 @@ procedural (`render/surface.ts`, `render/wallmat.ts`).
 - Posters are invented layouts (blocks and bars, no words); graffiti letters are random Latin letters
   from the sign atlas. No real tags, brands or names.
 
+## Light and air
+
+The night has to be lit by the things in it. A sign that glows but lights nothing round it reads as a sticker,
+and a street lit evenly from nowhere reads as a 2004 game.
+
+- **Signs light what is next to them.** Every sign is an area light in its own colour: the wall round it, the
+  pavement under it, the awning and the car passing it. A flat sign lights only the street side of its wall; a
+  blade lights the wall on both sides of it. Light falls off fast (inverse square), so walls are bright next to
+  their signs and dark between them. Lamps throw pools straight down, fires flicker, and festoons warm the street
+  under them.
+- **The air glows round lights.** Each bright light has a compact halo in the haze, a few metres round a sign or a
+  lamp. It is stronger in rain and when you look toward the light, and the walls in front of it cut it off. Ad
+  walls glow round the whole panel. Keep halos compact and the bloom's knee soft: a street full of overlapping
+  halos turns into a milky veil and kills the contrast the neon needs.
+- **Distance gets darker.** Near streets are lit by the signs in them. The haze between the eye and a far tower
+  takes about half its light at 500 m and most of it past a kilometre, and its own glow stays dark except where
+  the city's light is. Towers fade into the murk with distance instead of standing crisp to the horizon.
+- **The coarse light volume is bounce light** near the camera (a low wash under the local lights) and the whole of
+  the city's light far away, where the detail would be under a pixel anyway.
+
 ## Spectacle
 
 - **Giant holograms** are projections, not solids: a faint fill, a hot fresnel rim, a construction grid,
