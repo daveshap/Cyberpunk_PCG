@@ -528,7 +528,8 @@ export function addStructure(s: Structure, K: KitSink, propFor: BuilderFor): voi
         const x = x0 + (x1 - x0) * t;
         const yy = y0 + (y1 - y0) * t - 4 * sag * t * (1 - t);
         const z = z0 + (z1 - z0) * t;
-        K('beacon', 'small', { x, y: yy - 0.35, z, rot: 0, sx: 0.24, sy: 0.3, sz: 0.24, emit: 0.85, r: 0, g: 0, b: 0, cs: 0.4, er: s.col[0], eg: s.col[1], eb: s.col[2], mode: hash01(Math.floor(seed * 1e6), i, 5) < 0.08 ? 1 : 0 });
+        // festoon bulbs: small, warm incandescent tinted by the string's colour
+        K('beacon', 'small', { x, y: yy - 0.3, z, rot: 0, sx: 0.17, sy: 0.21, sz: 0.17, emit: 0.9, r: 0, g: 0, b: 0, cs: 0.4, er: s.col[0] * 0.4 + 0.6, eg: s.col[1] * 0.4 + 0.36, eb: s.col[2] * 0.4 + 0.14, mode: hash01(Math.floor(seed * 1e6), i, 5) < 0.08 ? 1 : 0 });
       }
       break;
     }
