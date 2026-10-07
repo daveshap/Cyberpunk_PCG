@@ -13,6 +13,8 @@ function damp(cur: number, target: number, halflife: number, dt: number): number
 
 export class ChaseCam {
   distance = 11;
+  /** Vertical field of view before the speed kick (the lens; Z cycles it). */
+  baseFov = 66;
   height = 2.6;
   private px = 0;
   private py = 0;
@@ -92,7 +94,7 @@ export class ChaseCam {
       cam.rotateY(n(3) * 0.03 * s);
     }
     // speed FOV kick
-    const targetFov = 66 + Math.min(18, Math.max(0, f.speed - 40) * 0.12);
+    const targetFov = this.baseFov * (1 + Math.min(0.27, Math.max(0, f.speed - 40) * 0.0018));
     this.fov = damp(this.fov, targetFov, 0.25, dt);
     if (Math.abs(cam.fov - this.fov) > 0.01) {
       cam.fov = this.fov;

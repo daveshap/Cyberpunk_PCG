@@ -279,7 +279,11 @@ export interface Facade {
   strips: number;
   grime: number;
   seed: number;
+  /** LED media facade: static outline lines, or part of the city-wide light show (see core/media.ts). */
+  media?: MediaKind;
 }
+
+export type MediaKind = 'outline' | 'show';
 
 export interface Tier {
   poly: Vec2[];
@@ -497,7 +501,7 @@ export interface Box3 {
 
 // ---------------------------------------------------------------------- city
 
-import type { OutskirtBuilding } from './outskirts';
+import type { OutskirtBuilding, OutskirtGrid } from './outskirts';
 import type { Transit } from './transit';
 
 // ------------------------------------------------------------------ spectacle
@@ -601,6 +605,8 @@ export interface CitySpec {
   boxes: Box3[];
   /** Plain blocks beyond the city limits that carry the sprawl to the horizon. */
   outskirts: OutskirtBuilding[];
+  /** The sprawl's street grid (lamps and traffic run along it). */
+  outskirtsGrid: OutskirtGrid;
   /** Elevated metro and subway entrances. */
   transit: Transit;
   /** Giant holograms and light pillars. */
