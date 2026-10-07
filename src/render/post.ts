@@ -182,12 +182,14 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
   const frameJ = uniform(0);
   const maxDist = uniform(4500);
   // Night air is dark: the haze only glows where city light actually is (the light
-  // volume), and otherwise just eats contrast with distance. The district tint and
-  // the horizon glow are kept as faint ambients so the murk keeps its colour.
-  const scatter = uniform(0.13);
-  const fogAmb = uniform(0.09);
+  // volume), and otherwise just eats contrast with distance. Long rays converge to the
+  // ambient terms below, so they must stay under the brightness of the dark walls and
+  // the night sky, or distance piles up into a glowing wall (the "N64 horizon"). The
+  // district tint and horizon glow are kept as faint ambients so the murk keeps its hue.
+  const scatter = uniform(0.11);
+  const fogAmb = uniform(0.016);
   /** How much of the horizon sky colour the haze takes on (light pollution). */
-  const skyAmb = uniform(0.035);
+  const skyAmb = uniform(0.02);
   const noiseAmt = uniform(0.75);
   const fogOn = uniform(1);
   const res = uniform(new THREE.Vector2(1920, 1080));
@@ -226,7 +228,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       const Lr = lightAt(p);
       // soft-saturate very bright pockets (a packed neon strip) so the haze glows, not whites out
       const Lsat = Lr.div(dot(Lr, vec3(0.3, 0.5, 0.2)).mul(0.25).add(1.0));
-      const Ls = Lsat.mul(scatter).add(tint.mul(fogAmb)).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.02));
+      const Ls = Lsat.mul(scatter).add(tint.mul(fogAmb)).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.008));
       const a = exp(dens.mul(dt).negate());
       acc.addAssign(Ls.mul(T).mul(a.oneMinus()));
       T.mulAssign(a);
@@ -243,7 +245,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     const span = select(abs(dyb).lessThan(1e-6), max(tEnd.sub(tMax), 0.0), exp(dyb.mul(tMax).negate()).sub(exp(dyb.mul(tEnd).negate())).div(safe));
     const tauTail = U.fogDensity.mul(zEnd.a.mul(2.0)).mul(h0).mul(max(span, 0.0)).mul(0.8);
     const aTail = exp(tauTail.negate().max(-40.0));
-    acc.addAssign(tintEnd.mul(fogAmb).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.02)).mul(T).mul(aTail.oneMinus()));
+    acc.addAssign(tintEnd.mul(fogAmb).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.008)).mul(T).mul(aTail.oneMinus()));
     T.mulAssign(aTail);
     const dbgMode = new URLSearchParams(location.search).get('hdbg');
     if (dbgMode === 'tmax') return vec4(vec3(tMax.div(3000.0)), 0.0);
@@ -402,24 +404,28 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     pipeline.outputNode = vec4(fog.rgb.mul(4.0).add(vec3(fog.a.mul(0.25))), 1.0);
     return { pipeline, render: () => pipeline.render(), frame: () => {
       renderer.getDrawingBufferSize(res.value);
+      (U.res.value as THREE.Vector2).copy(res.value);
       camera.updateMatrixWorld();
       camPos.value.setFromMatrixPosition(camera.matrixWorld);
     }, u: {} };
   }
   if (dbg === 'depth') {
+    // raw view distance / 3000 m, no tone mapping (for depth-binned measurements)
     const vpD = getViewPosition(screenUV, depth.sample(screenUV).r, camProjInv);
     pipeline.outputNode = vec4(vec3(length(vpD).div(3000.0)), 1.0);
+    pipeline.outputColorTransform = false;
     return { pipeline, render: () => pipeline.render(), frame: () => camera.updateMatrixWorld(), u: {} };
   }
   const aa = opts.traa ? traa(composed, depth, vel, camera) : composed;
 
-  const bloomNode = bloom(aa, 0.85, 0.55, 0.82);
+  const bloomNode = bloom(aa, 0.72, 0.42, 0.82);
   const bloomOn = uniform(opts.bloom ? 1 : 0);
-  const tint = uniform(new THREE.Vector3(1.0, 0.95, 1.06));
-  const lift = uniform(new THREE.Vector3(0.002, 0.0, 0.006));
+  const tint = uniform(new THREE.Vector3(1.0, 0.97, 1.03));
+  // blacks stay black (comps: Akira's inky night, film-like density); a hair of cool lift only
+  const lift = uniform(new THREE.Vector3(0.0, 0.0003, 0.0009));
   const sat = uniform(1.1);
   const contrast = uniform(1.08);
-  const chroma = uniform(0.45);
+  const chroma = uniform(0.12);
   const vigInt = uniform(0.6);
   const grain = uniform(0.08);
 
@@ -440,6 +446,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     render: () => pipeline.render(),
     frame: () => {
       renderer.getDrawingBufferSize(res.value);
+      (U.res.value as THREE.Vector2).copy(res.value);
       camera.updateMatrixWorld();
       camPos.value.setFromMatrixPosition(camera.matrixWorld);
       frameN = (frameN + 1) % 1024;
