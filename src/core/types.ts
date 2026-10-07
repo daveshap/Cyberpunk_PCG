@@ -443,6 +443,13 @@ export interface Structure {
   seed: number;
 }
 
+/**
+ * What an emitter stands for. Signs, street lamps, fires and festoon strings are also
+ * drawn as local lights by the renderer (signs from their SignSpec); the rest (window
+ * glow, crowns, soffits, beacons...) only feed the baked light volume.
+ */
+export type EmitterSrc = 'sign' | 'lamp' | 'fire' | 'festoon' | 'window';
+
 /** A coloured light source used to bake the light volume and ground light map. */
 export interface Emitter {
   x: number;
@@ -454,6 +461,8 @@ export interface Emitter {
   b: number;
   /** Influence radius in metres. */
   radius: number;
+  /** What it stands for; untagged emitters only feed the baked light. */
+  src?: EmitterSrc;
 }
 
 export interface SteamVent {

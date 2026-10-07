@@ -274,6 +274,19 @@ describe('generator', () => {
     }
     for (const g of s.signs) expect(Number.isFinite(g.x + g.y + g.z + g.w + g.h)).toBe(true);
   });
+
+  it('tags the emitters the renderer also draws as local lights', () => {
+    const s = city('sprawl');
+    const n = (src: string): number => s.emitters.filter((e) => e.src === src).length;
+    // nearly every sign has a tagged emitter (a few transit signs light only themselves)
+    expect(n('sign')).toBeGreaterThan(s.signs.length * 0.95);
+    expect(n('sign')).toBeLessThanOrEqual(s.signs.length);
+    expect(n('lamp')).toBeGreaterThan(500);
+    expect(n('festoon')).toBeGreaterThan(50);
+    expect(n('window')).toBeGreaterThan(1000);
+    // street-level local lights sit near the ground, signs at most a few hundred metres up
+    for (const e of s.emitters) if (e.src === 'lamp' || e.src === 'fire' || e.src === 'festoon') expect(e.y).toBeLessThan(40);
+  });
 });
 
 describe('flight', () => {

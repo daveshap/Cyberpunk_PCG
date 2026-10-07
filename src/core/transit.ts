@@ -214,13 +214,13 @@ export function transitDressing(t: Transit): { emitters: Emitter[]; signs: SignS
   for (const m of t.metro) {
     for (const s of m.pillars) {
       const p = metroAt(m, s);
-      emitters.push({ x: p.x, y: m.y - 4, z: p.z, r: 1.2, g: 0.8, b: 0.45, radius: 16 });
+      emitters.push({ x: p.x, y: m.y - 4, z: p.z, r: 1.2, g: 0.8, b: 0.45, radius: 16, src: 'lamp' });
     }
     for (const st of m.stations) {
       for (const k of [-24, 0, 24]) {
         const x = st.axis === 'x' ? st.x + k : st.x;
         const zz = st.axis === 'x' ? st.z : st.z + k;
-        emitters.push({ x, y: m.y + 3, z: zz, r: 2.2, g: 2.4, b: 2.7, radius: 24 });
+        emitters.push({ x, y: m.y + 3, z: zz, r: 2.2, g: 2.4, b: 2.7, radius: 24, src: 'lamp' });
       }
       // name boards on both canopy faces, in the line colour
       for (const side of [-1, 1]) {
@@ -256,6 +256,6 @@ export function transitDressing(t: Transit): { emitters: Emitter[]; signs: SignS
       }
     }
   }
-  for (const e of t.entrances) emitters.push({ x: e.x, y: 3, z: e.z, r: 0.6, g: 1.4, b: 1.8, radius: 9 });
+  for (const e of t.entrances) emitters.push({ x: e.x, y: 3, z: e.z, r: 0.6, g: 1.4, b: 1.8, radius: 9, src: 'lamp' });
   return { emitters, signs };
 }
