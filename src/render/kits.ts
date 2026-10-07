@@ -13,7 +13,14 @@ import {
   Fn,
   abs,
   attribute,
+  clamp,
   cos,
+  dot,
+  exp,
+  fwidth,
+  min,
+  oneMinus,
+  select,
   float,
   floor,
   fract,
@@ -37,6 +44,7 @@ import {
 } from 'three/tsl';
 import { MeshBuilder, addBox, addCylinder, addSphere } from './geometry';
 import { U, flicker, fogAtten, hash12, shade, vnoise } from './tsl';
+import { cellular, desat, fbmF, nightLightDir, shadeN, streakNoise } from './surface';
 
 export type KitGeom = 'box' | 'ac' | 'cyl' | 'tank' | 'dish' | 'fan' | 'lamp' | 'tree' | 'beacon' | 'cage' | 'container' | 'stack' | 'vent' | 'car';
 
@@ -165,9 +173,11 @@ function buildGeometries(): Record<KitGeom, THREE.BufferGeometry> {
     part(b, PART.body);
     addCylinder(b, 0, 0, 0, 0.16, 0.1, 3.2, 6, false);
     part(b, PART.louver); // foliage uses the louver slot on trees (see material)
-    addSphere(b, 0, 4.6, 0, 2.1, 1.7, 2.1, 7, 5);
-    addSphere(b, 0.8, 5.6, 0.4, 1.3, 1.2, 1.3, 6, 4);
-    addSphere(b, -0.7, 5.3, -0.5, 1.2, 1.1, 1.2, 6, 4);
+    addSphere(b, 0, 4.6, 0, 2.1, 1.7, 2.1, 12, 8);
+    addSphere(b, 0.8, 5.6, 0.4, 1.3, 1.2, 1.3, 10, 6);
+    addSphere(b, -0.7, 5.3, -0.5, 1.2, 1.1, 1.2, 10, 6);
+    addSphere(b, 0.3, 4.1, -1.1, 1.1, 0.9, 1.0, 9, 6);
+    addSphere(b, -0.9, 4.2, 0.9, 1.0, 0.85, 1.0, 9, 6);
     out.tree = b.build();
   }
   // beacon: small emissive sphere (radius 0.5)
@@ -359,56 +369,116 @@ export function makeKitMaterial(moving = false): THREE.MeshBasicNodeMaterial {
     const cls = floor(vC.w);
     const seed = fract(vC.w);
     const partId = floor(vPart.add(0.5));
+    // pixel footprint in metres, in uniform control flow
+    const mpp = fwidth(wp.x).max(fwidth(wp.y)).max(fwidth(wp.z)).max(1e-4);
+    const is = (k) => step(abs(cls.sub(k)), float(0.1));
+    // where on the unit: metres to its top, its foot and its nearest vertical edge
+    // (box-like kits; round ones only get the top and foot)
+    const sc = abs(vB.xyz).max(vec3(0.001));
+    const nl = normalize(nLocal);
+    const ax = abs(nl);
+    const sideF = step(ax.y, 0.5);
+    const topF = step(0.5, nl.y);
+    const dTop = max(oneMinus(vLoc.y).mul(sc.y), float(0.0));
+    const dBot = max(vLoc.y.mul(sc.y), float(0.0));
+    const dX = float(0.5).sub(abs(vLoc.x)).mul(sc.x);
+    const dZ = float(0.5).sub(abs(vLoc.z)).mul(sc.z);
+    const dS = select(ax.x.greaterThan(ax.z), dZ, dX);
+    const dSide = select(dS.lessThan(0.0), float(100.0), dS);
+    const dTopFace = min(select(dX.lessThan(0.0), float(100.0), dX), select(dZ.lessThan(0.0), float(100.0), dZ));
+    const edgeD = select(sideF.greaterThan(0.5), min(dSide, dTop), dTopFace);
+    // surface coordinates in metres: across and down a side, or across the top
+    const tw = normalize(vec2(n.z.negate(), n.x).add(vec2(1e-4, 0.0)));
+    const pt = select(sideF.greaterThan(0.5), vec2(dot(wp.xz, tw), wp.y), wp.xz);
+    const age = hash12(vec2(seed.mul(91.0), 3.7)).mul(0.7).add(0.3);
     const alb = vC.rgb.toVar();
     const spec = float(0.08).toVar();
     const rough = float(0.8).toVar();
+    const cav = float(1.0).toVar();
     // per-instance tonal variation
     alb.mulAssign(mix(0.82, 1.15, hash12(vec2(seed.mul(91.0), seed.mul(7.1)))));
-    // body classes
-    const grain = vnoise(wp.xz.mul(1.7).add(wp.y.mul(0.9))).mul(0.25).add(0.87);
-    alb.mulAssign(grain);
-    // metal: brighter spec
-    spec.assign(mix(spec, float(0.6), step(0.5, cls).mul(step(cls, 1.5))));
-    rough.assign(mix(rough, float(0.4), step(0.5, cls).mul(step(cls, 1.5))));
-    // glass railing: dark, reflective
-    const isGlass = step(1.5, cls).mul(step(cls, 2.5));
+    // fine grain, fading out below a couple of pixels
+    alb.mulAssign(mix(0.9, 1.08, fbmF(pt.mul(9.0).add(seed.mul(30.0)), mpp.mul(9.0))));
+    // concrete: aggregate, chipped arrises
+    const isConc = is(CLS.concrete).add(is(CLS.stone)).min(1.0);
+    alb.mulAssign(mix(1.0, mix(0.9, 1.07, fbmF(pt.mul(45.0), mpp.mul(45.0))), isConc));
+    const chips = smoothstep(0.04, 0.0, edgeD).mul(smoothstep(0.55, 0.7, vnoise(pt.mul(14.0).add(seed.mul(9.0))))).mul(isConc);
+    alb.assign(mix(alb, alb.mul(1.3).add(0.01), chips));
+    // metal: galvanised spangle and white rust
+    const isMetal = is(CLS.metal);
+    const cc = cellular(pt.mul(18.0).add(seed.mul(13.0)));
+    const spangle = mix(hash12(floor(pt.mul(18.0)).add(cc.x.mul(3.0))).sub(0.5).mul(0.16), float(0.0), smoothstep(0.02, 0.06, mpp));
+    alb.mulAssign(oneMinus(spangle.mul(isMetal)));
+    spec.assign(mix(spec, float(0.6), isMetal));
+    rough.assign(mix(rough, float(0.4), isMetal));
+    // glass railing: dark, reflective, streaky
+    const isGlass = is(CLS.glass);
     alb.assign(mix(alb, alb.mul(0.25), isGlass));
     spec.assign(mix(spec, float(0.9), isGlass));
     rough.assign(mix(rough, float(0.15), isGlass));
     // corrugated / louvered surfaces: ribs across the local x or y
-    const isLouver = step(2.5, partId).mul(step(partId, 3.5)).add(step(2.5, cls).mul(step(cls, 3.5))).min(1.0);
+    const isLouver = step(2.5, partId).mul(step(partId, 3.5)).add(is(CLS.corrugated)).min(1.0);
     const rib = fract(vLoc.x.mul(9.0).add(vLoc.z.mul(9.0))).sub(0.5).abs().mul(2.0);
     const louv = fract(vLoc.y.mul(14.0)).sub(0.5).abs().mul(2.0);
     const ribs = mix(rib, louv, step(0.6, abs(nLocal.x).max(abs(nLocal.z))).mul(step(cls, 2.5)));
     alb.assign(mix(alb, alb.mul(mix(0.55, 1.1, ribs)), isLouver));
-    // foliage (trees use the louver part with class foliage)
-    const isLeaf = step(3.5, cls).mul(step(cls, 4.5)).mul(step(2.5, partId));
+    cav.assign(mix(cav, mix(0.75, 1.0, ribs), isLouver.mul(0.6)));
+    // foliage (trees use the louver part with class foliage): clumps of leaves with dark
+    // gaps between them, lighter tips, a few dead brown clumps
+    const isLeaf = is(CLS.foliage).mul(step(2.5, partId));
+    const lq = vec2(dot(wp.xz, vec2(0.8, 0.6)), wp.y).mul(3.2);
+    const clump = cellular(lq.add(seed.mul(17.0)));
+    const leafC = smoothstep(0.0, 0.45, clump.y.sub(clump.x));
+    const leafK = smoothstep(0.08, 0.03, mpp);
     const leaf = vnoise(wp.xz.mul(2.3).add(wp.y.mul(1.7)));
-    alb.assign(mix(alb, vC.rgb.mul(mix(0.5, 1.4, leaf)), isLeaf));
-    // grille: dark mesh with bright wires
-    const isGrille = step(1.5, partId).mul(step(partId, 2.5)).add(step(5.5, cls).mul(step(cls, 6.5))).min(1.0);
+    const brown = step(0.82, hash12(floor(lq).add(seed.mul(5.0)))).mul(0.6);
+    const leafAlb = mix(vC.rgb, vec3(0.07, 0.05, 0.025), brown).mul(mix(0.5, 1.4, leaf)).mul(mix(float(0.7), mix(0.3, 1.25, leafC), leafK));
+    alb.assign(mix(alb, leafAlb, isLeaf));
+    cav.assign(mix(cav, mix(float(0.8), mix(0.55, 1.0, leafC), leafK), isLeaf));
+    // grille: dark mesh with bright wires, grimy
+    const isGrille = step(1.5, partId).mul(step(partId, 2.5)).add(is(CLS.grille)).min(1.0);
     const g2 = uv().mul(vec2(12.0, 9.0));
     const wire = max(smoothstep(0.82, 0.95, abs(fract(g2.x).sub(0.5)).mul(2.0)), smoothstep(0.82, 0.95, abs(fract(g2.y).sub(0.5)).mul(2.0)));
     alb.assign(mix(alb, mix(vec3(0.015), vC.rgb.mul(1.2), wire), isGrille));
-    // rust streaks on rust class
-    const isRust = step(6.5, cls).mul(step(cls, 7.5));
-    const streak = vnoise(vec2(wp.x.mul(2.0).add(wp.z.mul(2.0)), wp.y.mul(0.15)));
-    alb.assign(mix(alb, mix(alb, vec3(0.16, 0.06, 0.02), streak), isRust));
+    // painted metal and corrugated: paint worn off the edges to primer and steel, rust
+    // blooming from the edges and the foot, faded on top
+    const isPaint = is(CLS.painted).add(is(CLS.corrugated)).min(1.0).mul(oneMinus(isGrille));
+    const wearN = vnoise(pt.mul(22.0).add(seed.mul(5.0)));
+    const edgeWear = smoothstep(mix(0.012, 0.045, age), 0.0, edgeD).mul(smoothstep(0.3, 0.6, wearN)).mul(smoothstep(0.03, 0.01, mpp));
+    alb.assign(mix(alb, mix(vec3(0.2, 0.2, 0.21), vec3(0.32, 0.31, 0.3), wearN), edgeWear.mul(isPaint)));
+    const bloomN = fbmF(pt.mul(3.0).add(seed.mul(17.0)), mpp.mul(3.0));
+    const rustZone = clamp(smoothstep(0.08, 0.0, edgeD).mul(0.6).add(smoothstep(0.35, 0.0, dBot).mul(sideF)), 0.0, 1.0);
+    const isRust = is(CLS.rust);
+    // rust-class kits (pipes, barrels, small tanks) are part rusted, part old paint
+    const rustOf = smoothstep(0.42, 0.62, bloomN.add(rustZone.mul(0.3)));
+    const rustK = clamp(smoothstep(0.55, 0.7, bloomN.add(rustZone.mul(0.25))).mul(age).mul(isPaint).add(isRust.mul(mix(0.35, 0.95, rustOf))), 0.0, 1.0);
+    const rustC = mix(vec3(0.09, 0.04, 0.018), vec3(0.2, 0.085, 0.032), vnoise(pt.mul(11.0).add(seed))).mul(mix(0.7, 1.15, fbmF(pt.mul(30.0), mpp.mul(30.0))));
+    alb.assign(mix(alb, rustC, rustK));
+    alb.assign(mix(alb, desat(alb, 0.55).mul(1.18), topF.mul(isPaint).mul(age).mul(0.45)));
+    spec.assign(mix(spec, float(0.02), rustK));
+    rough.assign(mix(rough, float(0.95), rustK));
+    // weathering on every kit: streaks down the sides from the top, dust on top, grime at the foot
+    const sL = mix(0.3, 1.4, hash12(vec2(seed.mul(17.0), 1.1)));
+    const sN = mix(streakNoise(pt.x.add(seed.mul(40.0)), dTop, 7.0, 0.7), float(0.5), smoothstep(0.03, 0.08, mpp));
+    const streak = exp(dTop.negate().div(sL)).mul(smoothstep(0.4, 0.75, sN)).mul(sideF).mul(age).mul(oneMinus(isLeaf));
+    const streakC = mix(vec3(0.6, 0.55, 0.48), vec3(0.62, 0.38, 0.2), max(rustK, isRust.mul(0.5)));
+    alb.assign(mix(alb, alb.mul(streakC).mul(0.6), streak.mul(0.8)));
+    alb.assign(mix(alb, alb.mul(vec3(0.72, 0.68, 0.6)), topF.mul(age).mul(0.5).mul(oneMinus(isLeaf))));
+    alb.mulAssign(oneMinus(smoothstep(0.3, 0.0, dBot).mul(sideF).mul(0.35)));
     // gold
-    const isGold = step(9.5, cls).mul(step(cls, 10.5));
+    const isGold = is(CLS.gold);
     spec.assign(mix(spec, float(0.85), isGold));
     rough.assign(mix(rough, float(0.3), isGold));
-    // grime toward the bottom of tall things
-    const lit = shade(alb, n, wp, spec, rough);
+    const lit = shadeN(alb, n, n, wp, spec, rough, cav, nightLightDir(n, wp));
     // emissive
-    const isEmit = step(0.5, partId).mul(step(partId, 1.5)).add(step(7.5, cls).mul(step(cls, 8.5)).mul(step(partId, 0.5))).add(step(10.5, cls).mul(step(cls, 11.5))).min(1.0);
+    const isEmit = step(0.5, partId).mul(step(partId, 1.5)).add(is(CLS.lightbox).mul(step(partId, 0.5))).add(is(CLS.water)).min(1.0);
     const isHead = step(3.5, partId).mul(step(partId, 4.5));
     const fl = flicker(seed.mul(13.0), vD.w);
     // lamp heads take the lamp's own colour (sodium, white, pink) rather than plain white
     const headC = vD.rgb.mul(0.75).add(vec3(0.25, 0.23, 0.2));
     const e = vD.rgb.mul(vB.w).mul(fl).mul(isEmit).add(headC.mul(isHead).mul(vB.w.max(1.5).mul(0.75))).mul(U.neon);
     // lightbox faces: soft gradient so panels read as backlit acrylic
-    const lb = step(7.5, cls).mul(step(cls, 8.5));
+    const lb = is(CLS.lightbox);
     const lbShade = mix(1.0, smoothstep(0.0, 0.5, uv().y).mul(0.35).add(0.75), lb);
     return vec4(lit.add(e.mul(lbShade)), 1.0);
   })();
