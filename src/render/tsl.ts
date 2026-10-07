@@ -54,7 +54,7 @@ export const U = {
   skyHorizon: uniform(new THREE.Color(0.05, 0.025, 0.06)),
   glowA: uniform(new THREE.Color(0.55, 0.07, 0.4)),
   glowB: uniform(new THREE.Color(0.03, 0.3, 0.55)),
-  ambient: uniform(new THREE.Color(0.028, 0.03, 0.052)),
+  ambient: uniform(new THREE.Color(0.016, 0.018, 0.031)),
   lightGain: uniform(1),
   /** Light volume placement: x0, z0, 1/width, 1/depth. */
   volRect: uniform(new THREE.Vector4(-1500, -1500, 1 / 3000, 1 / 3000)),
@@ -70,6 +70,8 @@ export const U = {
   ssrOn: uniform(0),
   /** City land rect (x0, z0, x1, z1). */
   cityRect: uniform(new THREE.Vector4(-1400, -1400, 1400, 1400)),
+  /** Drawing buffer size in pixels (updated by the post pipeline each frame). */
+  res: uniform(new THREE.Vector2(1280, 720)),
   /** Debug: force every LED screen to one scene (-1 = run the programme). */
   screenScene: uniform(-1),
 };
@@ -204,23 +206,28 @@ export const skyColor = Fn(([dir]) => {
   const y = dir.y;
   const t = clamp(y, 0, 1);
   const inv = oneMinus(t);
-  const col = mix(vec3(U.skyZenith), vec3(U.skyHorizon), pow(inv, 4.0)).toVar();
+  // A city night sky is dark: light pollution is a thin, dim band low on the
+  // horizon, far below the brightness of any window or sign (comps: night photos of
+  // Chongqing and Hong Kong, Akira's Neo-Tokyo). It must also sit at or under the
+  // brightness the far haze settles to, or the horizon reads as a glowing wall.
+  const col = mix(vec3(U.skyZenith), vec3(U.skyHorizon).mul(0.38), pow(inv, 4.0)).toVar();
   const az = atan(dir.z, dir.x);
   const side = sin(az.add(0.7)).mul(0.5).add(0.5);
-  const glow = mix(vec3(U.glowA), vec3(U.glowB), side);
-  // light pollution: a low band of glow on the horizon, not a bright dome
-  col.addAssign(glow.mul(pow(inv, 9.0)).mul(0.17));
-  col.addAssign(glow.mul(pow(inv, 2.4)).mul(0.012));
+  const glowRaw = mix(vec3(U.glowA), vec3(U.glowB), side);
+  // keep the district hue but not its full saturation: smog glow is muddy, not neon
+  const glow = mix(vec3(dot(glowRaw, vec3(0.3, 0.5, 0.2))), glowRaw, 0.7);
+  col.addAssign(glow.mul(pow(inv, 12.0)).mul(0.05));
+  col.addAssign(glow.mul(pow(inv, 3.0)).mul(0.004));
   // low cloud deck lit from below by the city
   const cp = dir.xz.div(t.add(0.18)).mul(0.75);
   const cn = fbm2(cp.add(vec2(time.mul(0.004), time.mul(0.0015))));
   const cov = smoothstep(0.4, 0.78, cn).mul(smoothstep(0.02, 0.2, y));
-  const cloudCol = glow.mul(0.07).add(vec3(0.008, 0.007, 0.014)).mul(mix(1.6, 0.4, t));
-  col.assign(mix(col, cloudCol.add(col.mul(0.35)), cov.mul(0.9)));
-  // a sprinkle of stars through the gaps
+  const cloudCol = glow.mul(0.022).add(vec3(0.0035, 0.0035, 0.006)).mul(mix(1.5, 0.35, t));
+  col.assign(mix(col, cloudCol.add(col.mul(0.35)), cov.mul(0.85)));
+  // a few stars through the gaps, high up (light pollution hides the rest)
   const sc = floor(dir.xz.div(t.add(0.05)).mul(220.0));
-  const star = step(0.9965, hash12(sc)).mul(smoothstep(0.25, 0.6, y)).mul(oneMinus(cov));
-  col.addAssign(vec3(0.5, 0.55, 0.7).mul(star).mul(0.6));
+  const star = step(0.9982, hash12(sc)).mul(smoothstep(0.35, 0.7, y)).mul(oneMinus(cov));
+  col.addAssign(vec3(0.5, 0.55, 0.7).mul(star).mul(0.4));
   return col;
 });
 
@@ -257,7 +264,7 @@ export const skyline = Fn(([dir, base, camY]) => {
     const warm = mix(vec3(1.0, 0.6, 0.3), vec3(0.45, 0.7, 1.0), step(0.5, h2));
     const win = warm.mul(litK).mul(oneMinus(L.haze)).mul(0.16);
     const tip = smoothstep(8.0, 0.0, heightM.sub(worldY)).mul(step(0.92, h2)).mul(step(0.45, fract(time.mul(0.6).add(h2.mul(7.0)))));
-    const sil = mix(vec3(U.fogColor).mul(0.3), vec3(U.fogColor).mul(0.95), L.haze);
+    const sil = mix(vec3(U.fogColor).mul(0.12), vec3(U.fogColor).mul(0.38), L.haze);
     const layerCol = sil.add(win).add(vec3(1.0, 0.1, 0.1).mul(tip).mul(0.8));
     col.assign(mix(col, layerCol, inside));
   }
@@ -319,6 +326,16 @@ export const lightAt = Fn(([p]) => {
   return vol.add(g).mul(U.lightGain).mul(inside);
 });
 
+/**
+ * Street-level light from the fine 2D ground map only (lamp and shop-front pools),
+ * for surfaces on the ground. Walls take the coarse volume through shade().
+ */
+export const groundAt = Fn(([p]) => {
+  const c = volCoord(p);
+  const inside = smoothstep(0.0, 0.02, c.x).mul(smoothstep(1.0, 0.98, c.x)).mul(smoothstep(0.0, 0.02, c.z)).mul(smoothstep(1.0, 0.98, c.z));
+  return T.ground.sample(vec2(c.x, c.z)).rgb.mul(U.lightGain).mul(inside);
+});
+
 /** District fog tint (rgb) and density factor (a) at a world position. */
 export const zoneAt = Fn(([p]) => {
   const c = vec2(p.x.sub(U.volRect.x).mul(U.volRect.z), p.z.sub(U.volRect.y).mul(U.volRect.w));
@@ -338,17 +355,25 @@ export const fresnel = Fn(([ndv, f0]) => {
  */
 export const shade = Fn(([albedo, n, p, spec, rough]) => {
   const up = n.y.mul(0.5).add(0.5);
-  const sky = vec3(U.skyHorizon).mul(0.55).add(vec3(U.ambient));
+  const sky = vec3(U.skyHorizon).mul(0.25).add(vec3(U.ambient));
   const amb = mix(vec3(U.ambient).mul(0.6), sky, up);
   const L = lightAt(p.add(n.mul(2.0)));
   const ao = mix(0.55, 1.0, smoothstep(0.0, 3.0, p.y));
-  const diffuse = albedo.mul(amb.add(L.mul(0.6)).mul(ao));
+  // walls are lit by the signs and lamps near them, not washed by them: the light
+  // volume is coarse (13 m voxels), so its spill is kept low and knee'd (a packed
+  // sign street must not flood whole facades) and the contrast comes from the
+  // emitters themselves (comps: Tokyo and Hong Kong side streets at night)
+  const Lw = L.div(dot(L, vec3(0.3, 0.5, 0.2)).mul(0.8).add(1.0));
+  const diffuse = albedo.mul(amb.add(Lw.mul(0.17)).mul(ao));
   const V = normalize(cameraPosition.sub(p));
   const ndv = clamp(dot(n, V), 0.0, 1.0);
   const R = V.negate().sub(n.mul(dot(V.negate(), n).mul(2.0)));
   const env = skyColor(vec3(R.x, max(R.y, float(0.02)), R.z)).mul(oneMinus(rough).mul(0.8).add(0.2));
-  const spill = lightAt(p.add(R.mul(14.0))).mul(0.3);
-  const F = fresnel(ndv, float(0.04)).mul(spec);
+  const Ls = lightAt(p.add(R.mul(14.0)));
+  const spill = Ls.div(dot(Ls, vec3(0.3, 0.5, 0.2)).mul(0.6).add(1.0)).mul(0.3);
+  // roughness-aware Fresnel (Lagarde): rough concrete and tile do not turn into
+  // mirrors at grazing angles, which is what washed whole sign streets out
+  const F = float(0.04).add(max(oneMinus(rough), float(0.04)).sub(0.04).mul(pow(oneMinus(ndv), 5.0))).mul(spec);
   return diffuse.add(env.add(spill).mul(F)).mul(U.litGain);
 });
 
