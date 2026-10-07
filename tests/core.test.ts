@@ -222,6 +222,44 @@ describe('generator', () => {
     }
   });
 
+  it('gives the sprawl a street grid clear of its blocks', () => {
+    const s = city('sprawl');
+    const G = s.outskirtsGrid;
+    expect(G.xs.length).toBeGreaterThan(20);
+    expect(G.zs.length).toBeGreaterThan(10);
+    // every grid line runs between blocks, never through one
+    let through = 0;
+    for (const o of s.outskirts) {
+      for (const x of G.xs) if (x > o.rect.x0 && x < o.rect.x1) through++;
+      for (const z of G.zs) if (z > o.rect.z0 && z < o.rect.z1) through++;
+    }
+    expect(through).toBe(0);
+  });
+
+  it('lines tall towers with LED media facades, more of them on the waterfront', () => {
+    const s = city('sprawl');
+    const withMedia = s.buildings.filter((b) => b.tiers.some((t) => t.facade.media));
+    const shows = withMedia.filter((b) => b.tiers.some((t) => t.facade.media === 'show'));
+    expect(withMedia.length).toBeGreaterThan(20);
+    expect(shows.length).toBeGreaterThan(3);
+    for (const b of withMedia) {
+      expect(b.height).toBeGreaterThanOrEqual(50);
+      expect(b.kind).not.toBe('decayed');
+      // low podium tiers keep their own look
+      for (const t of b.tiers) if (t.facade.media) expect(t.y1).toBeGreaterThan(24);
+    }
+    // waterfront towers (within 650 m north of the shore) carry lines more often than inland ones
+    const coastAt = (x: number): number => s.coast.z[Math.max(0, Math.min(s.coast.z.length - 1, Math.round((x - s.coast.x0) / s.coast.step)))]!;
+    const tall = s.buildings.filter((b) => b.height > 100 && (b.kind === 'corporate' || b.kind === 'luxury'));
+    const front = tall.filter((b) => {
+      const d = coastAt((b.rect.x0 + b.rect.x1) / 2) - (b.rect.z0 + b.rect.z1) / 2;
+      return d > 0 && d < 650;
+    });
+    const inland = tall.filter((b) => !front.includes(b));
+    const share = (bs: typeof tall): number => bs.filter((b) => b.tiers.some((t) => t.facade.media)).length / Math.max(1, bs.length);
+    if (front.length > 4 && inland.length > 4) expect(share(front)).toBeGreaterThan(share(inland));
+  });
+
   it('generates a default city in under three seconds', () => {
     const t0 = performance.now();
     generateCity({ seed: 'timing' });
