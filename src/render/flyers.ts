@@ -20,6 +20,7 @@ import {
   float,
   floor,
   fract,
+  fwidth,
   max,
   mix,
   mrt,
@@ -44,6 +45,7 @@ import {
 import type { FlyerKind, Flyers, FlyerRoute, Incident } from '../core/types';
 import { MeshBuilder, addBox, addCylinder, addSphere } from './geometry';
 import { U, fogAtten, hash12, pin, shade } from './tsl';
+import { fbmF, joints, streakNoise } from './surface';
 
 // parts (aPart)
 const P = { body: 0, glass: 1, strobeA: 2, strobeB: 3, head: 4, stripe: 5, glow: 6, screen: 7, navRed: 8, navGreen: 9, navWhite: 10, tail: 11 };
@@ -280,6 +282,7 @@ function makeFlyerMaterial(): THREE.MeshBasicNodeMaterial {
   const vD = varying(attribute('iD', 'vec4'), 'vFlyD');
   const vE = varying(attribute('iE', 'vec4'), 'vFlyE');
   const vF = varying(attribute('iF', 'vec4'), 'vFlyF');
+  const vL = varying(positionGeometry, 'vFlyL');
   m.colorNode = Fn(() => {
     const n = normalize(nW);
     const wp = positionWorld;
@@ -287,8 +290,14 @@ function makeFlyerMaterial(): THREE.MeshBasicNodeMaterial {
     const t = time;
     const seed = vB.w;
     const is = (k) => step(abs(pt.sub(k)), float(0.1));
-    // lit surfaces: painted body, dark glass, livery stripe
-    const alb = pin(vC.rgb.mul(is(P.body)).add(vec3(0.012, 0.014, 0.02).mul(is(P.glass))).add(vF.rgb.mul(is(P.stripe))), 'vec3');
+    // lit surfaces: painted body with panel lines, grime streaks down the flanks and a
+    // darker belly, dark glass, livery stripe
+    const lp = vL.mul(vB.z);
+    const mpp = pin(fwidth(lp.x).max(fwidth(lp.y)).max(fwidth(lp.z)).max(1e-4));
+    const panel = max(joints(lp.z, 1.6, 0.008, mpp), joints(lp.y, 0.9, 0.008, mpp));
+    const grimeF = smoothstep(0.35, 0.8, streakNoise(lp.z.add(seed.mul(40.0)), lp.y.negate(), 2.0, 0.25)).mul(0.35).add(smoothstep(0.2, -0.6, lp.y).mul(0.3));
+    const bodyC = vC.rgb.mul(oneMinus(panel.mul(0.45))).mul(oneMinus(grimeF)).mul(mix(0.92, 1.06, fbmF(vec2(lp.z, lp.y).mul(3.0).add(seed.mul(9.0)), mpp.mul(3.0))));
+    const alb = pin(bodyC.mul(is(P.body)).add(vec3(0.012, 0.014, 0.02).mul(is(P.glass))).add(vF.rgb.mul(is(P.stripe))), 'vec3');
     const spec = mix(float(0.45), float(0.6), is(P.glass));
     const rough = mix(float(0.35), float(0.08), is(P.glass));
     const lit = shade(alb, n, wp, spec, rough);

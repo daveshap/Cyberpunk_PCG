@@ -6,7 +6,7 @@
  * up the neon it flies past.
  */
 import * as THREE from 'three/webgpu';
-import { Fn, abs, atan, attribute, cameraPosition, dot, float, floor, fract, max, mix, normalWorld, normalize, oneMinus, positionGeometry, positionWorld, pow, smoothstep, step, uniform, vec2, vec3, vec4 } from 'three/tsl';
+import { Fn, abs, atan, attribute, cameraPosition, dot, float, floor, fract, fwidth, length, max, mix, normalWorld, normalize, oneMinus, positionGeometry, positionWorld, pow, smoothstep, step, uniform, vec2, vec3, vec4 } from 'three/tsl';
 import { MeshBuilder, addBox, addCylinder } from './geometry';
 import { addPointGlow, makeTubeBuilder } from './neon';
 import { U, fresnel, hash12, lightAt, shade, skyColor, vnoise } from './tsl';
@@ -148,10 +148,16 @@ export class HoverCar {
       const lp = positionGeometry;
       const V = normalize(cameraPosition.sub(wp));
       const ndv = max(dot(n, V), 0.0);
-      // paint with metallic flake and panel lines
-      const flake = vnoise(lp.xz.mul(90.0).add(lp.y.mul(40.0))).mul(0.25).add(0.88);
-      const seam = max(step(0.985, fract(lp.z.mul(0.62).add(0.12))), smoothstep(0.012, 0.0, abs(lp.y.sub(0.62)))).mul(step(part, 0.5));
-      const alb = vec3(paint).mul(flake).mul(oneMinus(seam.mul(0.6)));
+      // paint with metallic flake and panel lines, an accent pinstripe down the flanks,
+      // road grime low on the body and behind the pods
+      const mpp = fwidth(lp.x).max(fwidth(lp.y)).max(fwidth(lp.z)).max(1e-4);
+      const flake = mix(vnoise(lp.xz.mul(90.0).add(lp.y.mul(40.0))).mul(0.25).add(0.88), float(1.0), smoothstep(0.004, 0.012, mpp));
+      const gap = (d) => smoothstep(mpp.add(0.006), mpp.mul(0.5), abs(d));
+      const seam = max(gap(fract(lp.z.mul(0.62).add(0.12)).sub(0.5).abs().sub(0.5).mul(1.61)), gap(lp.y.sub(0.62))).mul(step(part, 0.5));
+      const flank = smoothstep(0.78, 0.95, abs(lp.x));
+      const stripe = smoothstep(0.016, 0.008, abs(lp.y.sub(0.74))).mul(flank).mul(step(-2.3, lp.z)).mul(step(lp.z, 2.2));
+      const grime = smoothstep(0.55, 0.22, lp.y).mul(vnoise(lp.xz.mul(6.0)).mul(0.5).add(0.5)).add(smoothstep(-1.2, -2.6, lp.z).mul(smoothstep(0.75, 0.35, lp.y)).mul(0.5));
+      const alb = mix(vec3(paint).mul(flake), vec3(accent).mul(0.5), stripe).mul(oneMinus(seam.mul(0.6))).mul(oneMinus(grime.mul(0.35))).add(vec3(0.012, 0.01, 0.008).mul(grime));
       const R = V.negate().sub(n.mul(dot(V.negate(), n).mul(2.0)));
       // clear coat reflects the sky, the local light and a band of city windows and
       // neon along the horizon, so the paint reads as glossy rather than grey
@@ -167,7 +173,11 @@ export class HoverCar {
       // structured city reflection and the sky carry the clear coat
       const env = skyColor(vec3(R.x, max(R.y, 0.02), R.z)).mul(0.45).add(local.mul(0.08)).add(city);
       const F = fresnel(ndv, float(0.04));
-      const coat = env.mul(F).mul(1.1);
+      // grime dulls the clear coat; rain beads up on top as little bright points
+      const beadC = floor(lp.xz.div(0.06));
+      const beadO = fract(lp.xz.div(0.06)).sub(0.5).mul(0.06);
+      const bead = step(0.7, hash12(beadC)).mul(smoothstep(0.012, 0.006, length(beadO))).mul(smoothstep(0.3, 0.7, n.y)).mul(U.rain).mul(smoothstep(0.01, 0.004, mpp));
+      const coat = env.mul(F).mul(1.1).mul(oneMinus(grime.mul(0.5))).add(env.mul(bead).mul(0.6));
       const body = shade(alb, n, wp, float(0.08), float(0.6)).add(coat);
       // rim so the silhouette always reads against the city
       const rim = pow(oneMinus(ndv), 3.0).mul(0.07).mul(vec3(0.5, 0.6, 0.9));
