@@ -364,7 +364,7 @@ function makeConeMaterial(): THREE.MeshBasicNodeMaterial {
     const v = uv().y; // 0 at the source, 1 at the end
     const along = pow(oneMinus(v), float(1.7));
     const dust = mx_fractal_noise_float(wp.mul(0.1).add(vec3(0, time.mul(-0.5), 0)), 2, 2.0, 0.5).mul(0.35).add(0.75);
-    const rgb = vC.rgb.mul(vB.w).mul(facing).mul(along).mul(dust).mul(U.fogDensity.mul(900.0)).mul(U.neon);
+    const rgb = vC.rgb.mul(vB.w).mul(facing).mul(along).mul(dust).mul(U.fogDensity.mul(500.0)).mul(U.neon);
     return vec4(fogAtten(rgb, wp), 1.0);
   })();
   m.colorNode = vec4(0, 0, 0, 0);
