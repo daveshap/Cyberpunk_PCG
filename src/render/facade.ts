@@ -29,6 +29,7 @@ import {
   cameraPosition,
   clamp,
   dot,
+  exp,
   float,
   floor,
   fract,
@@ -53,6 +54,8 @@ import {
   vec4,
 } from 'three/tsl';
 import { U, fresnel, hash12, hash13, lightAt, pin, shade, skyColor, vnoise } from './tsl';
+import { bond, cellular, fbmF, joints, lineAA, nightLightDir, shadeN, streakNoise, throwUp } from './surface';
+import { wallSurface } from './wallmat';
 
 export const STYLE_ID = { glass: 0, panel: 1, grid: 2, shop: 3, balcony: 4, metal: 5, raw: 6, lux: 7 } as const;
 
@@ -177,7 +180,6 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const ay1 = float(0.85).toVar();
     const recess = float(0.2).toVar();
     const roomKind = float(0).toVar(); // 0 home, 1 office, 2 shop
-    const wallSpec = float(0.05).toVar();
     const glassTint = vec3(0.55, 0.62, 0.66).toVar();
     If(style.lessThan(0.5), () => {
       // glass curtain wall
@@ -187,7 +189,6 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
       ay1.assign(0.985);
       recess.assign(0.05);
       roomKind.assign(1);
-      wallSpec.assign(0.3);
       glassTint.assign(vec3(0.45, 0.6, 0.68));
     })
       .ElseIf(style.lessThan(1.5), () => {
@@ -198,8 +199,7 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
         ay1.assign(0.94);
         recess.assign(0.3);
         roomKind.assign(1);
-        wallSpec.assign(0.18);
-      })
+        })
       .ElseIf(style.lessThan(3.5), () => {
         // punched windows (grid / shop upper floors)
         const jitter = hash12(vec2(floor(u.div(bw)), seed.mul(31.0))).sub(0.5).mul(0.12).mul(step(2.5, style));
@@ -225,8 +225,7 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
         ay1.assign(0.86);
         recess.assign(0.08);
         roomKind.assign(1);
-        wallSpec.assign(0.25);
-      })
+        })
       .ElseIf(style.lessThan(6.5), () => {
         ax0.assign(0.22);
         ax1.assign(0.78);
@@ -241,8 +240,7 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
         ay0.assign(0.06);
         ay1.assign(0.94);
         recess.assign(0.32);
-        wallSpec.assign(0.2);
-        glassTint.assign(vec3(0.7, 0.62, 0.5));
+          glassTint.assign(vec3(0.7, 0.62, 0.5));
       });
 
     // ----------------------------------------------------------- shop band
@@ -274,31 +272,11 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const detail = smoothstep(1.0, 3.0, pxCell);
     const near = step(dist, U.detailDist);
 
-    // ------------------------------------------------- wall material
-    const wallN = vnoise(vec2(u.mul(0.35).add(seed.mul(40.0)), wp.y.mul(0.35)));
-    const wallC = base.mul(mix(0.85, 1.12, wallN)).toVar();
-    // panel seams on panel/glass/lux, formwork on raw, ribs on metal
-    const seamU = smoothstep(0.012, 0.0, min(fu, oneMinus(fu)).mul(bwE)).mul(detail);
-    const seamV = smoothstep(0.02, 0.0, min(fv, oneMinus(fv)).mul(fhE)).mul(detail);
-    wallC.mulAssign(oneMinus(max(seamU, seamV).mul(0.45)));
-    If(style.greaterThan(4.5).and(style.lessThan(5.5)), () => {
-      const rib = abs(fract(u.mul(3.3)).sub(0.5)).mul(2.0);
-      wallC.mulAssign(mix(0.62, 1.08, smoothstep(0.2, 0.9, rib).mul(detail).add(oneMinus(detail).mul(0.6))));
-    });
-    // spandrel on curtain walls: darker, glossy
-    If(style.lessThan(0.5), () => {
-      wallC.assign(base.mul(mix(0.35, 0.65, step(0.5, fv))));
-    });
-    // gravity grime: streaks under windows and dirt near the base
-    const streakN = vnoise(vec2(u.mul(1.6).add(seed.mul(13.0)), wp.y.mul(0.07)));
-    const underWin = step(sx0, fu).mul(step(fu, sx1)).mul(step(fv, sy0));
-    const streak = smoothstep(0.35, 0.9, streakN).mul(grime).mul(mix(0.5, 1.0, underWin));
-    const baseDirt = smoothstep(4.0, 0.0, wp.y).mul(0.4).add(smoothstep(tierH.sub(3.0), tierH, v).mul(0.25));
-    const dirtK = clamp(streak.mul(0.55).add(baseDirt.mul(grime.add(0.3))), 0.0, 0.85);
-    wallC.mulAssign(oneMinus(dirtK));
-    wallC.assign(mix(wallC, wallC.mul(vec3(0.95, 0.88, 0.78)), grime.mul(0.5)));
-    // wet sheen low on the walls in rain
-    const wet = U.wet.mul(smoothstep(12.0, 0.0, wp.y)).mul(0.6);
+    // ------------------------------------------------- wall surface (wallmat.ts)
+    // metres per pixel on the wall, taken here in uniform control flow
+    const mpp = pin(max(fwidth(u), fwidth(v)).max(1e-4));
+    const S = wallSurface({ u, v, vf, wy: wp.y, n, tng, mpp, near, base, fhE, bwE, sx0, sx1, sy0, sy1, inShop, cu, cv, fu, fv, style, seed, grime, tierH, wlen });
+    const Ld = nightLightDir(n, wp);
 
     // ------------------------------------------------- windows
     const inAp = step(sx0, fu).mul(step(fu, sx1)).mul(step(sy0, fv)).mul(step(fv, sy1));
@@ -308,7 +286,7 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const gu = pin(fu.add(dU));
     const gv = pin(fv.add(dV));
     const hitGlass = step(sx0, gu).mul(step(gu, sx1)).mul(step(sy0, gv)).mul(step(gv, sy1));
-    const revealC = base.mul(0.42).mul(mix(0.6, 1.0, smoothstep(0.0, 0.5, gv)));
+    const revealC = mix(base, S.alb, 0.5).mul(0.45).mul(mix(0.6, 1.0, smoothstep(0.0, 0.5, gv)));
 
     // lit state: whole floors of offices go dark together; homes are random
     const floorKey = hash12(vec2(cv.add(seed.mul(91.0)), seed.mul(3.0)));
@@ -354,27 +332,75 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
 
     // shutters on some shop units (more with grime)
     const shutter = inShop.mul(step(h1, grime.mul(0.45).add(0.06)));
-    const shutterC = vec3(0.32, 0.31, 0.3).mul(mix(0.6, 1.0, abs(fract(gv.mul(30.0)).sub(0.5)).mul(2.0))).mul(oneMinus(grime.mul(0.5)));
+    // roller shutters: painted or bare slats, rust and dirt at the foot, runs from the
+    // box at the top, and tags in grimy blocks
+    const slat = abs(fract(gv.mul(30.0)).sub(0.5)).mul(2.0);
+    const shPaint = select(h2.lessThan(0.55), vec3(0.32, 0.31, 0.3), select(h2.lessThan(0.75), vec3(0.12, 0.2, 0.16), select(h2.lessThan(0.9), vec3(0.08, 0.12, 0.2), vec3(0.3, 0.07, 0.05))));
+    const shY = gv.sub(sy0).mul(fhE);
+    const shX = gu.mul(bwE);
+    const shRust = smoothstep(0.5, 0.0, shY.add(vnoise(vec2(shX.mul(3.0), h1.mul(9.0))).mul(0.3))).mul(grime.mul(0.8).add(0.2));
+    const shRuns = smoothstep(0.5, 0.8, streakNoise(shX, sy1.sub(gv).mul(fhE), 4.0, 0.6)).mul(grime);
+    const shTU = throwUp(shX.sub(0.12), shY, float(0.35).add(h3.mul(0.3)), float(0.75), h1, float(4.0), mpp);
+    const shTag = shTU.x.add(shTU.y).min(1.0).mul(step(h3, grime.mul(grime).mul(0.8)));
+    const shFill = mix(vec3(0.55, 0.06, 0.05), vec3(0.06, 0.38, 0.5), step(0.5, h2));
+    const shutterBase = shPaint.mul(mix(0.6, 1.0, slat)).mul(oneMinus(grime.mul(0.35))).mul(oneMinus(shRuns.mul(0.3)));
+    const shutterC = mix(mix(shutterBase, vec3(0.13, 0.055, 0.025), shRust.mul(0.7)), mix(vec3(0.015), shFill, shTU.x), shTag.mul(0.88));
     // shop fascia band (dark, signs sit here)
     const fascia = inShop.mul(step(0.78, fv));
 
-    // reflection on glass
-    const R = V.sub(n.mul(dot(V, n).mul(2.0)));
+    // reflection on glass: each pane sits a hair off true (more on old towers), so the
+    // reflected city breaks up pane by pane instead of sliding across the facade as one mirror
+    const tiltAmt = mix(0.006, 0.022, grime).mul(detail);
+    const nP = normalize(n.add(tng.mul(h2.sub(0.5).mul(tiltAmt))).add(vec3(0.0, h3.sub(0.5).mul(tiltAmt), 0.0)));
+    const R = V.sub(nP.mul(dot(V, nP).mul(2.0)));
     const env = skyColor(vec3(R.x, max(R.y, float(0.03)), R.z));
     const Lr = lightAt(wp.add(R.mul(18.0)));
     const spill = Lr.div(dot(Lr, vec3(0.3, 0.5, 0.2)).mul(0.6).add(1.0)).mul(0.4);
     const F = fresnel(vn, float(0.06));
-    const refl = env.add(spill).mul(F).mul(mix(0.9, 0.5, grime));
+    // dirty glass: a dust film that collects toward the bottom of each pane, with rain streaks
+    const paneY = gv.sub(sy0).div(max(sy1.sub(sy0), float(0.05)));
+    const glassDirt = clamp(grime.mul(0.6).add(0.12).mul(smoothstep(0.35, 0.75, streakNoise(u, v, 3.0, 0.3)).mul(0.6).add(smoothstep(0.4, 0.0, paneY).mul(0.5))), 0.0, 1.0);
+    const refl = env.add(spill).mul(F).mul(mix(0.9, 0.5, grime)).mul(oneMinus(glassDirt.mul(0.45)));
 
     // compose the pane
-    const pane = glassCol.mul(glassTint).add(glassEmit.mul(oneMinus(boarded)).mul(oneMinus(voidWin))).add(refl).toVar();
+    const pane = glassCol.mul(glassTint).add(glassEmit.mul(oneMinus(glassDirt.mul(0.2))).mul(oneMinus(boarded)).mul(oneMinus(voidWin))).add(refl).toVar();
+    pane.addAssign(shade(vec3(0.06, 0.055, 0.05), n, wp, float(0.0), float(1.0)).mul(glassDirt.mul(0.5)));
+    // frames: aluminium, white or dark, round each pane, a meeting rail on sliding windows
+    // (homes), a transom on some, mullions across shop fronts; silhouetted against lit rooms
+    const aaU = mpp.div(bwE);
+    const aaW = mpp.div(fhE);
+    const fU = float(0.045).div(bwE);
+    const fV = float(0.045).div(fhE);
+    const insideU = smoothstep(sx0.add(fU).sub(aaU), sx0.add(fU).add(aaU), gu).mul(smoothstep(sx1.sub(fU).add(aaU), sx1.sub(fU).sub(aaU), gu));
+    const insideV = smoothstep(sy0.add(fV).sub(aaW), sy0.add(fV).add(aaW), gv).mul(smoothstep(sy1.sub(fV).add(aaW), sy1.sub(fV).sub(aaW), gv));
+    const home = step(roomKind, 0.5).mul(oneMinus(inShop));
+    const rail = smoothstep(fU.mul(0.6).add(aaU), fU.mul(0.6).sub(aaU), abs(gu.sub(sx0.add(sx1).mul(0.5)))).mul(home).mul(step(0.25, h3));
+    const trY = sy0.add(sy1.sub(sy0).mul(0.74));
+    const transom = smoothstep(fV.mul(0.5).add(aaW), fV.mul(0.5).sub(aaW), abs(gv.sub(trY))).mul(step(0.55, h2)).mul(oneMinus(inShop));
+    const shopMull = smoothstep(float(0.03).add(mpp), float(0.03).sub(mpp), abs(fract(gu.mul(bwE).div(1.25)).sub(0.5)).mul(1.25)).mul(inShop);
+    const frameK = max(max(oneMinus(insideU.mul(insideV)), rail), max(transom, shopMull)).mul(hitGlass).mul(smoothstep(0.07, 0.03, mpp)).mul(step(0.5, style)).mul(oneMinus(boarded));
+    const fh3 = hash12(vec2(seed.mul(4.4), 2.9));
+    const frameAlb = select(fh3.lessThan(0.5), vec3(0.17, 0.175, 0.18), select(fh3.lessThan(0.8), vec3(0.3, 0.3, 0.29), vec3(0.04, 0.036, 0.032))).mul(oneMinus(grime.mul(0.4)));
+    const frameLit = shade(frameAlb, n, wp, float(0.35), float(0.4)).add(lc.mul(isLitE).mul(U.winGain).mul(0.025));
+    pane.assign(mix(pane, frameLit, frameK));
     pane.assign(mix(pane, vec3(0.006), voidWin));
-    pane.assign(mix(pane, base.mul(vec3(0.9, 0.7, 0.45)).mul(0.6).mul(shade(vec3(1), n, wp, float(0), float(1))), boarded));
+    // boarded windows: weathered plywood sheets with grain and screw lines
+    const plyGrain = vnoise(vec2(gu.mul(bwE).mul(1.5), gv.mul(fhE).mul(28.0)).add(h1.mul(30.0)));
+    const plySheet = step(0.5, fract(gu.mul(bwE).div(1.2)));
+    const plyC = vec3(0.24, 0.17, 0.1).mul(mix(0.75, 1.15, plyGrain)).mul(mix(0.85, 1.05, plySheet)).mul(oneMinus(grime.mul(0.45)));
+    pane.assign(mix(pane, shade(plyC, n, wp, float(0.02), float(0.9)), boarded));
     pane.assign(mix(pane, shade(shutterC, n, wp, float(0.25), float(0.6)), shutter));
 
     // ------------------------------------------------- compose wall + window
-    const wallLit = shade(wallC, n, wp, wallSpec.add(wet), mix(0.7, 0.3, wet));
-    const recessC = shade(revealC, n, wp, float(0.02), float(1.0));
+    // a lit window lights the wall round it a little, most of all the sill and the wall
+    // below it, so the facade's stains and texture show up next to the lit rooms
+    const dWx = max(max(sx0.sub(fu), fu.sub(sx1)), float(0.0)).mul(bwE);
+    const dWy = max(max(sy0.sub(fv), fv.sub(sy1)), float(0.0)).mul(fhE);
+    const below = step(fv, sy0);
+    const winSpill = exp(length(vec2(dWx, dWy)).negate().div(mix(0.22, 0.4, below))).mul(mix(0.45, 1.0, below)).mul(oneMinus(inAp)).mul(oneMinus(inShop.mul(0.5)));
+    const wallLit = shadeN(S.alb, n, S.nb, wp, S.spec, S.rough, S.cav, Ld).add(S.alb.mul(lc).mul(isLitE).mul(U.winGain).mul(0.05).mul(winSpill).mul(oneMinus(boarded)));
+    // the reveal is lit by the room behind the glass
+    const recessC = shade(revealC, n, wp, float(0.02), float(1.0)).add(lc.mul(isLitE).mul(U.winGain).mul(0.05).mul(oneMinus(boarded)));
     const winMix = inAp.mul(oneMinus(fascia));
     const detailed = mix(wallLit, mix(recessC, pane, hitGlass), winMix);
     // far average: window fraction times average pane brightness
@@ -514,7 +540,14 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
   return m;
 }
 
-/** Roof material: concrete, gravel and grime, with helipads, gardens and crown lights by roof kind (aR.x). */
+/**
+ * Roof material. Flat roofs are one of four finishes per building: bitumen membrane
+ * laid in strips with lapped seams and patches, gravel ballast scoured down to the
+ * membrane in places, concrete pavers on pedestals, or a pale coating that shows
+ * every stain. All of them collect dirt along the parapet, dry rings where water
+ * ponds (puddles in the rain), dirt round the drains, moss and soot in grimy
+ * blocks. Helipads, gardens, crowns and soffits (aR.x) sit on top of that.
+ */
 export function makeRoofMaterial(): THREE.MeshBasicNodeMaterial {
   const m = new THREE.MeshBasicNodeMaterial();
   m.name = 'roof';
@@ -525,63 +558,172 @@ export function makeRoofMaterial(): THREE.MeshBasicNodeMaterial {
     const B = attribute('aRb', 'vec4'); // centre x, centre z, half extent, base brightness
     const wp = positionWorld;
     const kind = R.x;
+    const grime = R.y;
+    const seed = R.z;
     // kind 4 is a soffit (the underside of an overhang) and faces down
     const n = vec3(0, oneMinus(step(3.5, kind).mul(2.0)), 0);
-    const ed = uv().x; // metres to the nearest edge of the cap
-    const p = wp.xz;
-    const nz = vnoise(p.mul(0.4).add(R.z.mul(50.0)));
-    const fine = vnoise(p.mul(3.1));
-    const alb = vec3(0.13, 0.13, 0.14).mul(B.w).mul(mix(0.75, 1.15, nz)).mul(mix(0.9, 1.05, fine)).toVar();
-    alb.mulAssign(oneMinus(R.y.mul(smoothstep(0.4, 0.8, vnoise(p.mul(0.15))).mul(0.5))));
-    const e = vec3(0).toVar();
-    const q = p.sub(B.xy);
+    const ed = pin(uv().x); // metres to the nearest edge of the cap
+    const p = pin(wp.xz, 'vec2');
+    // metres per pixel on the roof, taken here in uniform control flow
+    const mpp = pin(max(fwidth(p.x), fwidth(p.y)).max(1e-4));
+    const q = pin(p.sub(B.xy), 'vec2');
     const r = length(q);
-    // helipad: dark pad, white ring and H, edge lights
+    const rf = pin(hash12(vec2(seed.mul(53.0), 7.1)));
+    const rd = pin(hash12(vec2(seed.mul(17.0), 2.3)));
+    const bright = B.w;
+    const alb = vec3(0).toVar();
+    const gx = float(0).toVar();
+    const gz = float(0).toVar();
+    const spec = float(0.05).toVar();
+    const rough = float(0.85).toVar();
+    const cav = float(1).toVar();
+    const membraneC = vec3(0.05, 0.05, 0.052).mul(bright);
+    If(rf.lessThan(0.3), () => {
+      // bitumen membrane in 1 m strips with a lapped seam bead, granules, patches, blisters
+      const across = select(rd.lessThan(0.5), p.y, p.x);
+      const along = select(rd.lessThan(0.5), p.x, p.y);
+      const strip = floor(across);
+      const s1 = hash12(vec2(strip, seed.mul(9.0)));
+      alb.assign(membraneC.mul(mix(0.8, 1.25, s1)));
+      const seamD = fract(across).sub(0.08);
+      const seam = lineAA(seamD, 0.014, mpp);
+      alb.assign(mix(alb, alb.mul(1.5).add(0.006), seam));
+      const beadK = smoothstep(0.05, 0.015, mpp);
+      const slope = seamD.div(0.02).clamp(-1.0, 1.0).mul(-0.4).mul(seam).mul(beadK);
+      gx.assign(select(rd.lessThan(0.5), float(0.0), slope));
+      gz.assign(select(rd.lessThan(0.5), slope, float(0.0)));
+      alb.mulAssign(mix(0.88, 1.12, fbmF(p.mul(30.0), mpp.mul(30.0))));
+      // patches: newer, blacker rectangles
+      const pc = vec2(floor(along.div(2.5)), strip);
+      const patch = step(0.9, hash12(pc.add(seed.mul(5.0)))).mul(step(0.15, fract(along.div(2.5)))).mul(step(fract(along.div(2.5)), 0.8));
+      alb.assign(mix(alb, membraneC.mul(0.7), patch));
+      // blisters
+      const bl = cellular(p.mul(0.9).add(seed.mul(7.0)));
+      const blister = smoothstep(0.14, 0.05, bl.x).mul(step(0.6, vnoise(p.mul(0.25)))).mul(grime);
+      alb.assign(mix(alb, alb.mul(1.15), blister.mul(0.5)));
+      spec.assign(0.08);
+      rough.assign(0.6);
+    })
+      .ElseIf(rf.lessThan(0.55), () => {
+        // gravel ballast, scoured down to the membrane in places
+        const cc = cellular(p.mul(22.0));
+        const tone = vnoise(p.mul(22.0).add(3.3));
+        const stoneK = smoothstep(0.03, 0.01, mpp);
+        const pebble = smoothstep(0.0, 0.3, cc.y.sub(cc.x));
+        const gravel = mix(vec3(0.085, 0.085, 0.08), vec3(0.21, 0.2, 0.19), tone).mul(mix(0.45, 1.0, pebble)).mul(bright);
+        alb.assign(mix(vec3(0.13, 0.128, 0.122).mul(bright), gravel, stoneK));
+        cav.assign(mix(float(0.85), mix(0.6, 1.0, pebble), stoneK));
+        const scour = smoothstep(0.7, 0.78, fbmF(p.mul(0.5).add(seed.mul(3.0)), mpp.mul(0.5))).mul(0.7);
+        alb.assign(mix(alb, membraneC, scour));
+        cav.assign(mix(cav, 1.0, scour));
+        spec.assign(0.02);
+        rough.assign(0.95);
+      })
+      .ElseIf(rf.lessThan(0.8), () => {
+        // concrete pavers on pedestals: a tone and a tilt per paver, dark open joints
+        const Bd = bond(p.x, p.y, 0.6, 0.6, 0.008, mpp, 0.0);
+        const t1 = hash12(Bd.id.add(seed.mul(11.0)));
+        const t2 = hash12(Bd.id.add(seed.mul(29.0)).add(4.4));
+        const varK = smoothstep(0.3, 0.12, mpp);
+        alb.assign(vec3(0.16, 0.155, 0.15).mul(bright).mul(mix(1.0, mix(0.82, 1.15, t1), varK)));
+        alb.mulAssign(mix(0.92, 1.06, fbmF(p.mul(12.0), mpp.mul(12.0))));
+        alb.assign(mix(alb, vec3(0.02, 0.022, 0.02), Bd.joint));
+        cav.assign(mix(1.0, 0.4, Bd.joint));
+        gx.assign(t1.sub(0.5).mul(0.03).mul(varK));
+        gz.assign(t2.sub(0.5).mul(0.03).mul(varK));
+        spec.assign(0.04);
+        rough.assign(0.85);
+      })
+      .Else(() => {
+        // pale coating: shows every stain; seams every 3 m
+        alb.assign(vec3(0.36, 0.36, 0.35).mul(bright).mul(mix(0.92, 1.05, fbmF(p.mul(0.8).add(seed), mpp.mul(0.8)))));
+        const seam = max(joints(p.x, 3.0, 0.01, mpp), joints(p.y, 3.0, 0.01, mpp));
+        alb.assign(mix(alb, alb.mul(0.7), seam));
+        spec.assign(0.08);
+        rough.assign(0.6);
+      });
+
+    // ---- weathering: dirt along the parapet, dry rings round ponding, drains, moss, soot
+    const wK = grime.mul(0.8).add(0.25);
+    const edgeK = smoothstep(1.1, 0.0, ed).mul(0.55).add(smoothstep(0.25, 0.0, ed).mul(0.35)).mul(vnoise(p.mul(1.7)).mul(0.6).add(0.6));
+    const pondN = fbmF(p.mul(0.11).add(seed.mul(13.0)), mpp.mul(0.11));
+    const pond = pin(smoothstep(0.6, 0.68, pondN));
+    const rings = smoothstep(0.55, 0.62, pondN).mul(sin(pondN.mul(170.0)).mul(0.5).add(0.5)).mul(smoothstep(0.08, 0.03, mpp)).mul(oneMinus(pond));
+    // drains near two opposite corners of the cap
+    const hx = B.z.mul(0.7);
+    const dq = vec2(abs(q.x).sub(hx), abs(q.y).sub(hx));
+    const dd = length(dq);
+    const drainSide = step(0.0, q.x.mul(q.y).mul(select(rd.lessThan(0.5), float(1.0), float(-1.0))));
+    const drain = smoothstep(0.14, 0.1, dd).mul(drainSide);
+    const halo = smoothstep(1.4, 0.0, dd).mul(drainSide);
+    const soot = smoothstep(0.62, 0.8, fbmF(p.mul(0.3).add(seed.mul(17.0)), mpp.mul(0.3))).mul(grime);
+    const dirt = clamp(edgeK.mul(0.6).add(pond.mul(0.2)).add(rings.mul(0.2)).add(halo.mul(0.45)).add(soot.mul(0.2)), 0.0, 1.0).mul(wK);
+    alb.assign(mix(alb, alb.mul(vec3(0.58, 0.54, 0.48)), dirt));
+    alb.assign(mix(alb, vec3(0.008), drain));
+    const moss = clamp(edgeK.add(pond.mul(0.8)).add(halo.mul(0.6)), 0.0, 1.0).mul(smoothstep(0.45, 0.7, fbmF(p.mul(0.9).add(seed.mul(2.0)), mpp.mul(0.9)))).mul(grime.mul(grime));
+    alb.assign(mix(alb, vec3(0.022, 0.038, 0.02), moss.mul(0.45)));
+    alb.mulAssign(mix(0.92, 1.06, vnoise(p.mul(0.4).add(seed.mul(50.0)))));
+
+    const e = vec3(0).toVar();
+    // helipad: dark pad, worn white ring and H, tyre scuffs, edge lights
     If(kind.greaterThan(0.5).and(kind.lessThan(1.5)), () => {
       const pr = B.z.mul(0.8);
       const pad = step(r, pr);
-      alb.assign(mix(alb, vec3(0.05, 0.055, 0.06), pad));
+      alb.assign(mix(alb, vec3(0.05, 0.055, 0.06).mul(mix(0.85, 1.1, vnoise(p.mul(2.0)))), pad));
       const ring = smoothstep(0.25, 0.0, abs(r.sub(pr.mul(0.82))));
-      const hx = step(abs(q.x), pr.mul(0.28)).mul(step(abs(q.y), pr.mul(0.32)));
-      const hcut = step(pr.mul(0.08), abs(q.x)).mul(step(pr.mul(0.18), abs(q.x))).mul(step(pr.mul(0.06), abs(q.y)));
-      const hmark = hx.mul(oneMinus(hcut.mul(0.0))).mul(step(pr.mul(0.18), abs(q.x)).add(step(abs(q.y), pr.mul(0.05))).min(1.0));
-      alb.assign(mix(alb, vec3(0.7), max(ring, hmark).mul(pad)));
+      const hx2 = step(abs(q.x), pr.mul(0.28)).mul(step(abs(q.y), pr.mul(0.32)));
+      const hmark = hx2.mul(step(pr.mul(0.18), abs(q.x)).add(step(abs(q.y), pr.mul(0.05))).min(1.0));
+      const wear = smoothstep(0.35, 0.65, fbmF(p.mul(1.6), mpp.mul(1.6)));
+      alb.assign(mix(alb, vec3(0.62), max(ring, hmark).mul(pad).mul(mix(0.45, 1.0, wear))));
+      const scuff = smoothstep(0.03, 0.0, abs(fract(atan2_(q).mul(9.0).add(r.mul(0.05))).sub(0.5)).mul(0.2)).mul(smoothstep(pr.mul(0.5), pr.mul(0.2), r)).mul(0.5);
+      alb.assign(mix(alb, vec3(0.015), scuff.mul(pad)));
       const dots = step(0.7, fract(atan2_(q).mul(4.0))).mul(smoothstep(0.35, 0.0, abs(r.sub(pr))));
       e.addAssign(C.rgb.mul(dots).mul(4.0).mul(sin(time.mul(3.0)).mul(0.4).add(0.8)));
     })
       .ElseIf(kind.greaterThan(1.5).and(kind.lessThan(2.5)), () => {
         // garden: grass, hedges, path
         const g = vnoise(p.mul(1.3));
-        alb.assign(mix(vec3(0.02, 0.05, 0.025), vec3(0.04, 0.08, 0.035), g));
+        alb.assign(mix(vec3(0.02, 0.05, 0.025), vec3(0.04, 0.08, 0.035), g).mul(mix(0.85, 1.15, fbmF(p.mul(7.0), mpp.mul(7.0)))));
         const path = smoothstep(0.6, 0.45, abs(fract(q.x.mul(0.08)).sub(0.5)));
         alb.assign(mix(alb, vec3(0.2, 0.18, 0.15), path.mul(0.6)));
         e.addAssign(vec3(1.0, 0.8, 0.5).mul(step(0.985, hash12(floor(p.mul(0.5))))).mul(1.5));
+        spec.assign(0.02);
+        rough.assign(0.95);
       })
       .ElseIf(kind.greaterThan(2.5).and(kind.lessThan(3.5)), () => {
         // crown: dark deck with accent edge glow
-        alb.assign(vec3(0.04, 0.045, 0.05));
+        alb.assign(vec3(0.04, 0.045, 0.05).mul(mix(0.8, 1.1, vnoise(p.mul(0.7)))));
         const edge = smoothstep(1.5, 0.0, ed);
         e.addAssign(C.rgb.mul(edge).mul(C.w).mul(3.0));
       })
       .ElseIf(kind.greaterThan(3.5), () => {
-        // soffit: dark coffered concrete, an accent light line set in from the
-        // edge and a grid of warm downlights (some dead in grimy districts)
+        // soffit: dark coffered concrete with water stains, an accent light line set in from
+        // the edge and a grid of warm downlights (some dead in grimy districts)
         // patterns finer than a pixel fade to their average far away
-        const far = smoothstep(0.06, 0.25, fwidth(p.x).add(fwidth(p.y)));
+        const far = smoothstep(0.06, 0.25, mpp.mul(2.0));
         const g3 = abs(fract(p.div(3.0)).sub(0.5));
         const rib = mix(smoothstep(0.42, 0.47, max(g3.x, g3.y)), float(0.12), far);
-        alb.assign(vec3(0.03, 0.03, 0.034).mul(mix(1.0, 1.6, rib)).mul(mix(0.85, 1.1, nz)));
+        const stain = smoothstep(0.55, 0.75, fbmF(p.mul(0.4).add(seed.mul(9.0)), mpp.mul(0.4))).mul(grime.mul(0.6).add(0.2));
+        alb.assign(vec3(0.03, 0.03, 0.034).mul(mix(1.0, 1.6, rib)).mul(mix(0.85, 1.1, vnoise(p.mul(0.4)))).mul(oneMinus(stain.mul(0.4))));
+        gx.assign(0.0);
+        gz.assign(0.0);
         const line = smoothstep(0.2, 0.0, abs(ed.sub(1.2)));
         e.addAssign(C.rgb.mul(line).mul(C.w).mul(3.2));
         const cellP = p.div(4.5);
         const cd = length(fract(cellP).sub(0.5)).mul(4.5);
-        const alive = step(R.y.mul(0.55), hash12(floor(cellP).add(R.z.mul(91.0))));
+        const alive = step(grime.mul(0.55), hash12(floor(cellP).add(seed.mul(91.0))));
         const spot = smoothstep(0.34, 0.16, cd);
         const dl = mix(spot, float(0.016), far).mul(step(2.4, ed)).mul(alive);
         e.addAssign(vec3(1.0, 0.8, 0.58).mul(dl).mul(3.0));
       });
-    const wetK = U.wet.mul(smoothstep(0.55, 0.75, vnoise(p.mul(0.25))));
-    const lit = shade(alb.mul(oneMinus(wetK.mul(0.4))), n, wp, wetK.mul(0.7).add(0.02), mix(0.9, 0.2, wetK));
+
+    // rain: the whole roof darkens and shines, ponds turn into puddles
+    const wetK = U.wet.mul(pond.mul(0.85).add(0.15));
+    alb.mulAssign(oneMinus(wetK.mul(0.35)));
+    spec.assign(mix(spec, float(0.9), U.wet.mul(pond)).add(U.wet.mul(0.06)));
+    rough.assign(mix(rough, float(0.05), U.wet.mul(pond)));
+    const nb = normalize(vec3(gx.negate(), 1.0, gz.negate()).mul(n.y));
+    const lit = shadeN(alb, n, nb, wp, spec, rough, cav, nightLightDir(n, wp));
     return vec4(lit.add(e.mul(U.neon)), 1.0);
   })();
   return m;
