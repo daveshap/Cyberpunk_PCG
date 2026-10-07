@@ -8,14 +8,17 @@
  *    show at grazing angles,
  *  - each pane looks into a raymarched room box (walls, ceiling light, floor,
  *    a desk, curtains) when it is near enough to matter,
- *  - far away the pattern fades to its average so nothing shimmers,
- *  - storefronts along shop walls get their own retail interiors and shutters.
+ *  - farther out, floors become ribbons of light, then a dim average with
+ *    faint bands, so nothing shimmers and nothing glows flat,
+ *  - storefronts along shop walls get their own retail interiors and shutters,
+ *  - media towers carry LED lines on their slabs and corners.
  *
  * Vertex attributes (constant per wall):
  *  aF0 (style, floorH, bayW, win)  aF1 (lit, warm, grime, seed)
  *  aF2 (base rgb, strips)           aF3 (accent rgb, wall length)
- *  aF4 (shopH, tierH, taper, 0)    uv (metres along the wall, metres above the tier base)
- *  (taper: on sloped walls, how far each corner leans in per metre of height)
+ *  aF4 (shopH, tierH, taper, media) uv (metres along the wall, metres above the tier base)
+ *  (taper: on sloped walls, how far each corner leans in per metre of height;
+ *   media: 0 none, 1 LED outline, 2 the city-wide light show)
  */
 import * as THREE from 'three/webgpu';
 import {
@@ -358,7 +361,8 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     // reflection on glass
     const R = V.sub(n.mul(dot(V, n).mul(2.0)));
     const env = skyColor(vec3(R.x, max(R.y, float(0.03)), R.z));
-    const spill = lightAt(wp.add(R.mul(18.0))).mul(0.4);
+    const Lr = lightAt(wp.add(R.mul(18.0)));
+    const spill = Lr.div(dot(Lr, vec3(0.3, 0.5, 0.2)).mul(0.6).add(1.0)).mul(0.4);
     const F = fresnel(vn, float(0.06));
     const refl = env.add(spill).mul(F).mul(mix(0.9, 0.5, grime));
 
@@ -380,9 +384,46 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     // (the expected light colour, not this cell's: a per-cell colour here turns into blotches)
     const avgLc = select(inShop.greaterThan(0.5), vec3(0.95, 0.9, 0.8), mix(mix(coolC, warmC, warm), neutralC, 0.28).mul(0.9));
     // mid-range towers still glow with their windows; far ones fall to a dim average
-    const glowK = mix(float(0.15), float(0.04), smoothstep(600.0, 1600.0, dist));
-    const avgPane = avgLc.mul(litF.mul(0.72)).mul(glowK).mul(U.winGain).add(env.mul(0.06));
-    const avg = mix(wallLit, avgPane, apArea.mul(0.85));
+    const glowK = mix(float(0.11), float(0.035), smoothstep(600.0, 1600.0, dist));
+    const share = litF.mul(0.72);
+    // Rows: once single windows merge sideways but floors are still a few pixels tall,
+    // each floor reads as a ribbon of light whose brightness is its share of lit rooms
+    // (comps: office towers at night are bands of lit and dark floors). The share
+    // matches the near rule above: office windows key on mix(h1, floorKey, 0.6), so a
+    // floor's expected share is clamp((share - 0.6 floorKey) / 0.4); homes vary floor to
+    // floor around the mean as a handful of random rooms would.
+    const rowShare = select(
+      roomKind.greaterThan(0.5),
+      mix(share, clamp(share.sub(floorKey.mul(0.6)).div(0.4), 0.0, 1.0), 0.75),
+      share.mul(mix(0.55, 1.45, hash12(vec2(cv.add(seed.mul(17.0)), 6.3)))).min(1.0),
+    );
+    // floors differ in light too: cool, neutral or warm tubes, the odd tinted floor
+    const fh2 = hash12(vec2(cv.mul(1.31).add(seed.mul(23.0)), 2.2));
+    const rowTint = select(fh2.lessThan(0.3), vec3(0.8, 0.95, 1.12), select(fh2.lessThan(0.55), vec3(1.12, 0.96, 0.78), select(fh2.lessThan(0.93), vec3(1.0), vec3(0.85, 0.75, 1.25))));
+    const aaV = fwidth(vf).max(1e-4);
+    const row = smoothstep(sy0.sub(aaV), sy0.add(aaV), fv).mul(oneMinus(smoothstep(sy1.sub(aaV), sy1.add(aaV), fv)));
+    // a ribbon is not a flat band: lit and dark runs along the floor (a few bays long),
+    // and the ceiling lights make the top of each row brighter than the desks below
+    const runs = vnoise(vec2(u.div(bwE.mul(3.5)).add(seed.mul(31.0)), cv.mul(1.7).add(seed.mul(7.0))));
+    const ceilK = mix(0.5, 1.35, smoothstep(sy0, sy1, fv));
+    const ribbonC = avgLc
+      .mul(rowTint)
+      .mul(select(inShop.greaterThan(0.5), share, rowShare))
+      .mul(mix(0.2, 1.45, smoothstep(0.25, 0.75, runs)))
+      .mul(ceilK)
+      .mul(0.19)
+      .mul(U.winGain)
+      .mul(mix(1.0, 0.5, smoothstep(700.0, 1800.0, dist)));
+    const avgRow = mix(wallLit, ribbonC.add(env.mul(0.06)), row.mul(sx1.sub(sx0)).mul(oneMinus(fascia)));
+    // Flat: when even floors merge, pairs of floors still keep faint bands (office
+    // floors switch off together) that fade to the mean below ~1.5 px per pair.
+    const pairKey = hash12(vec2(floor(cv.mul(0.5)).add(seed.mul(13.0)), seed.mul(5.0).add(2.7)));
+    const bandShare = select(roomKind.greaterThan(0.5), step(pairKey, share).mul(0.9).add(0.04), pairKey.mul(pairKey).mul(2.4).mul(share).min(1.0));
+    const pxPair = fhE.mul(2.0).div(aaV);
+    const floorShare = mix(share, mix(share, bandShare, 0.6), smoothstep(1.2, 3.0, pxPair));
+    const avgPane = avgLc.mul(select(inShop.greaterThan(0.5), share, floorShare)).mul(glowK).mul(U.winGain).add(env.mul(0.06));
+    const avgFlat = mix(wallLit, avgPane, apArea.mul(0.85));
+    const avg = mix(avgFlat, avgRow, smoothstep(1.4, 3.2, fhE.div(aaV)));
     const col = mix(avg, detailed, detail).toVar();
 
     // ------------------------------------------------- emissive strips
@@ -410,6 +451,64 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
       const trim = oneMinus(inAp).mul(step(sx0.sub(0.04), fu).mul(step(fu, sx1.add(0.04))).mul(step(sy0.sub(0.04), fv)).mul(step(fv, sy1.add(0.04))));
       col.assign(mix(col, shade(vec3(0.6, 0.42, 0.16), n, wp, float(0.8), float(0.3)), trim.mul(detail)));
     });
+    // ------------------------------------------------- LED media facades
+    // (comps: Chongqing and Shanghai riverfronts, Hong Kong's harbour front) LED lines on
+    // the floor slabs and corners. 'outline' towers hold a steady warm, cool or gold line;
+    // 'show' towers run one city-wide programme on a shared clock, so the waterfront
+    // skyline moves as one. Lines keep their light with distance: a 0.24 m strip widens
+    // to ~0.7 px and dims by the same factor, so a far tower still draws its lines.
+    // Derivatives are taken here, outside the branch (they need uniform control flow).
+    const mppV = pin(fwidth(v).max(1e-4));
+    const mppU = pin(fwidth(u).max(1e-4));
+    const dCorner = pin(min(uL, uR));
+    const media = F4.w;
+    If(media.greaterThan(0.5), () => {
+      const line = (d, half, mpp) => {
+        const w = max(half, mpp.mul(0.7));
+        return smoothstep(w, w.mul(0.2), d).mul(half.div(w));
+      };
+      // the slab nearest this pixel: the bottom of this floor or of the next one
+      const lower = step(fv, 0.5);
+      const slabIdx = cv.add(oneMinus(lower));
+      const dSlab = min(fv, oneMinus(fv)).mul(fhE);
+      const k1 = hash12(vec2(seed.mul(3.7), 1.9));
+      const k2 = hash12(vec2(seed.mul(5.3), 7.7));
+      // outline towers line every floor, every second or every third
+      const every = floor(k1.mul(2.99)).add(1.0);
+      const onEvery = step(fract(slabIdx.div(every).add(0.001)), 0.02);
+      const slab = line(dSlab, float(0.12), mppV).mul(oneMinus(inShop));
+      const corner = line(dCorner, float(0.18), mppU);
+      const outlineC = select(k2.lessThan(0.42), vec3(1.0, 0.8, 0.52), select(k2.lessThan(0.75), vec3(0.82, 0.9, 1.0), vec3(1.0, 0.62, 0.24)));
+      const breathe = mix(1.0, sin(time.mul(0.6).add(seed.mul(40.0))).mul(0.18).add(0.82), step(0.6, k1));
+      const outline = outlineC.mul(slab.mul(onEvery).add(corner)).mul(breathe).mul(3.0);
+      // the show: four scenes of 12 s on one clock, with a dip to dark between them
+      const T = time.add(7.0);
+      const scene = floor(fract(T.div(48.0)).mul(4.0));
+      const lt = fract(T.div(12.0)).mul(12.0);
+      const fade = smoothstep(0.0, 0.7, lt).mul(smoothstep(12.0, 11.3, lt));
+      const h01 = clamp(v.div(max(tierH, float(1.0))), 0.0, 1.0);
+      // 0: colour bands climbing every tower, offset along the shore
+      const climbPos = fract(lt.mul(0.16).add(wp.x.mul(0.0004)));
+      const climb = smoothstep(0.22, 0.0, abs(h01.sub(climbPos))).mul(0.8).add(0.22);
+      const climbHue = h01.mul(0.35).add(0.52);
+      // 1: a wave rolling along the skyline
+      const wave = sin(wp.x.mul(0.011).sub(lt.mul(2.3))).mul(0.5).add(0.5);
+      const waveHue = fract(wp.x.mul(0.00035).add(lt.mul(0.02)).add(0.85));
+      // 2: a rainbow scrolling down the towers
+      const rainbowHue = fract(wp.y.mul(0.0032).sub(lt.mul(0.07)).add(wp.x.mul(0.0002)));
+      // 3: sparkle on the slabs and mullions (per bay up close, its average far away)
+      const cell = hash12(vec2(cu.add(seed.mul(13.0)), cv.add(floor(lt.mul(5.0)).mul(7.0))));
+      const sparkleNear = step(0.78, cell);
+      const sparkle = mix(float(0.22), sparkleNear, smoothstep(0.6, 0.2, mppU.div(bwE)));
+      const hue = select(scene.lessThan(0.5), climbHue, select(scene.lessThan(1.5), waveHue, select(scene.lessThan(2.5), rainbowHue, float(0.58))));
+      const amt = select(scene.lessThan(0.5), climb, select(scene.lessThan(1.5), wave.mul(0.9).add(0.1), select(scene.lessThan(2.5), float(1.0), sparkle)));
+      const rgb = clamp(abs(fract(vec3(hue, hue.add(0.6667), hue.add(0.3333))).mul(6.0).sub(3.0)).sub(1.0), 0.0, 1.0);
+      const showC = mix(rgb, vec3(1.0), select(scene.greaterThan(2.5), float(0.55), float(0.12)));
+      const mull = line(min(fu, oneMinus(fu)).mul(bwE), float(0.08), mppU).mul(step(2.5, scene));
+      const show = showC.mul(slab.add(corner).add(mull.mul(0.7))).mul(amt).mul(fade).mul(3.6);
+      col.addAssign(select(media.lessThan(1.5), outline, show).mul(U.neon));
+    });
+
     return vec4(col, 1.0);
   })();
   return m;
