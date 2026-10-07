@@ -71,7 +71,9 @@ async function main(): Promise<void> {
   if (!QUALITY[quality]) quality = 'medium';
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(66, 1, 1.0, 14000);
+  // lens: ?fov= sets the base vertical field of view (photo comps often want 30-45, i.e. a longer lens)
+  const baseFov = Math.max(10, Math.min(100, Number(q.get('fov') ?? 66)));
+  const camera = new THREE.PerspectiveCamera(baseFov, 1, 1.0, 14000);
   scene.add(camera);
   const resize = (): void => {
     const Q = QUALITY[quality]!;
@@ -168,7 +170,10 @@ async function main(): Promise<void> {
     else flight.setWorld(world);
     flight.ceiling = Math.max(700, world.maxY + 200);
     flight.teleport(spec.spawn.x, spec.spawn.y, spec.spawn.z, spec.spawn.yaw, -0.04);
-    if (!chase) chase = new ChaseCam(camera, world);
+    if (!chase) {
+      chase = new ChaseCam(camera, world);
+      chase.baseFov = baseFov;
+    }
     else chase.setWorld(world);
     autopilot = new Autopilot(spec, world);
     if (auto) autopilot.start(flight);
@@ -184,7 +189,7 @@ async function main(): Promise<void> {
       }
     });
     console.info(
-      `[city] seed=${seed} ${spec.stats.buildings} buildings, ${spec.stats.signs} signs, ${spec.stats.kits} kits; gen ${spec.stats.ms.toFixed(0)} ms, render build ${city.stats.buildMs.toFixed(0)} ms (bake ${city.stats.bakeMs.toFixed(0)} ms), ${city.stats.meshes} meshes, ${city.stats.instances} instances, ${(city.stats.triangles / 1e6).toFixed(2)}M tris; total ${(performance.now() - t0).toFixed(0)} ms`,
+      `[city] seed=${seed} ${spec.stats.buildings} buildings, ${spec.stats.signs} signs, ${spec.stats.kits} kits; gen ${spec.stats.ms.toFixed(0)} ms, render build ${city.stats.buildMs.toFixed(0)} ms (bake ${city.stats.bakeMs.toFixed(0)} ms), ${city.stats.meshes} meshes, ${city.stats.instances} instances, ${(city.stats.triangles / 1e6).toFixed(2)}M tris, ${city.lights.counts.lights} lights, ${city.lights.counts.cars} cars; total ${(performance.now() - t0).toFixed(0)} ms`,
     );
     ui.setBusy(false);
     building = false;
@@ -259,6 +264,13 @@ async function main(): Promise<void> {
     else if (code === 'KeyM') ui.toggleMap();
     else if (code === 'KeyH') ui.toggleHud();
     else if (code === 'KeyR') flight.teleport(spec.spawn.x, spec.spawn.y, spec.spawn.z, spec.spawn.yaw, -0.04);
+    else if (code === 'KeyZ') {
+      // lens: wide (66) -> normal (45) -> long (30) -> tele (20); a long lens stacks the skyline like the photo comps
+      const lenses = [66, 45, 30, 20];
+      const i = lenses.findIndex((f) => Math.abs(f - chase.baseFov) < 0.5);
+      chase.baseFov = lenses[(i + 1) % lenses.length]!;
+      ui.toast('LENS ' + Math.round(chase.baseFov) + '°');
+    }
     else if (code.startsWith('Digit')) {
       const n = Number(code.slice(5)) - 1;
       const kinds = ['corporate', 'jpmarket', 'cnmarket', 'megablock', 'industrial', 'decayed', 'luxury'];
@@ -364,6 +376,10 @@ async function main(): Promise<void> {
     chase.setWorld(world);
   };
   const freeCam = (x: number, y: number, z: number, yaw: number, pitch: number): void => {
+    if (Math.abs(camera.fov - baseFov) > 0.01) {
+      camera.fov = baseFov;
+      camera.updateProjectionMatrix();
+    }
     camera.position.set(x, y, z);
     camera.rotation.set(pitch, yaw, 0, 'YXZ');
     camera.updateMatrixWorld();
