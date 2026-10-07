@@ -7,7 +7,7 @@
  * projecting framed signs and AC boxes, and an American street billboards,
  * marquees and rooftop letters.
  */
-import type { Block, Building, Culture, District, DistrictKind, Emitter, KitInstance, KitKind, LandUse, Lot, RGB, RoadPiece, SignKind, SignSpec, SteamVent, Street, Structure, Tier, Vec2 } from './types';
+import type { Block, Building, Culture, District, DistrictKind, Emitter, EmitterSrc, KitInstance, KitKind, LandUse, Lot, RGB, RoadPiece, SignKind, SignSpec, SteamVent, Street, Structure, Tier, Vec2 } from './types';
 import type { Zoning } from './zoning';
 import { PROFILES, tuneMul } from './profiles';
 import { Rng, clamp, hash01, lerp } from './rng';
@@ -89,8 +89,10 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
   const emitters: Emitter[] = [];
   const steam: SteamVent[] = [];
 
-  const emit = (x: number, y: number, zz: number, c: RGB, k: number, radius: number): void => {
-    emitters.push({ x, y, z: zz, r: c[0] * k, g: c[1] * k, b: c[2] * k, radius });
+  const emit = (x: number, y: number, zz: number, c: RGB, k: number, radius: number, src?: EmitterSrc): void => {
+    const e: Emitter = { x, y, z: zz, r: c[0] * k, g: c[1] * k, b: c[2] * k, radius };
+    if (src) e.src = src;
+    emitters.push(e);
   };
   const kit = (kind: KitKind, x: number, y: number, zz: number, rot: number, sx: number, sy: number, sz: number, col: RGB, e = 0, seed = 0): void => {
     if (kits.length >= KIT_CAP) return;
@@ -186,7 +188,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               seed: r.next(),
             };
             signs.push(sp);
-            emit(sp.x + w.nx * 2, sp.y - 0.5, sp.z + w.nz * 2, c, sp.intensity * sw * 0.18 * (sp.flicker === 3 ? 0 : 1), clamp(sw * 1.6, 6, 18));
+            emit(sp.x + w.nx * 2, sp.y - 0.5, sp.z + w.nz * 2, c, sp.intensity * sw * 0.18 * (sp.flicker === 3 ? 0 : 1), clamp(sw * 1.6, 6, 18), 'sign');
           }
           // ---- awnings in markets
           if (market && r.chance(0.28)) structures.push({ kind: 'awning', p: [px - w.tx * uw * 0.45, pz - w.tz * uw * 0.45, px + w.tx * uw * 0.45, pz + w.tz * uw * 0.45, shopH - 0.15, r.range(1.2, 2.2)], col: col(u + 2), col2: [0.05, 0.05, 0.05], seed: r.next() });
@@ -230,7 +232,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               seed: r.next(),
             };
             signs.push(sp);
-            emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.35 * (sp.flicker === 3 ? 0 : 1), clamp(h * 1.8, 8, 22));
+            emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.35 * (sp.flicker === 3 ? 0 : 1), clamp(h * 1.8, 8, 22), 'sign');
           } else if (culture === 'cn' && r.chance(clamp(signDensity * 0.3, 0, 0.85))) {
             // big projecting framed sign over the street
             const sh = Math.min(roomUp - 0.5, r.range(2.6, 7.5));
@@ -266,7 +268,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               seed: r.next(),
             };
             signs.push(sp);
-            emit(sp.x, sp.y, sp.z, c, sp.intensity * sw * sh * 0.12 * (sp.flicker === 3 ? 0 : 1), clamp(sh * 2.2, 8, 26));
+            emit(sp.x, sp.y, sp.z, c, sp.intensity * sw * sh * 0.12 * (sp.flicker === 3 ? 0 : 1), clamp(sh * 2.2, 8, 26), 'sign');
           } else if (culture === 'us' && (u === 0 || (night && u % 2 === 0)) && r.chance(clamp(signDensity * 0.18, 0, night ? 0.85 : 0.6))) {
             // classic vertical letter blade at the corner, or a marquee
             if (r.chance(0.5) && roomUp > 5) {
@@ -301,7 +303,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
                 seed: r.next(),
               };
               signs.push(sp);
-              emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.3, clamp(h * 2, 8, 20));
+              emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.3, clamp(h * 2, 8, 20), 'sign');
             } else {
               const sw = Math.min(uw * 0.95, r.range(5, 9));
               const c = col(u);
@@ -332,7 +334,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
                 seed: r.next(),
               };
               signs.push(sp);
-              emit(sp.x + w.nx * 2, sp.y, sp.z + w.nz * 2, c, sp.intensity * sw * 0.4, 18);
+              emit(sp.x + w.nx * 2, sp.y, sp.z + w.nz * 2, c, sp.intensity * sw * 0.4, 18, 'sign');
             }
           }
         }
@@ -371,7 +373,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               twoSided: false,
               seed: r.next(),
             });
-            emit(w.a[0] + w.tx * along + w.nx * 10, y, w.a[1] + w.tz * along + w.nz * 10, c, 2.2 * sw * sh * 0.025, clamp(sw * 1.5, 18, 50));
+            emit(w.a[0] + w.tx * along + w.nx * 10, y, w.a[1] + w.tz * along + w.nz * 10, c, 2.2 * sw * sh * 0.025, clamp(sw * 1.5, 18, 50), 'sign');
           }
         }
       }
@@ -417,7 +419,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
             twoSided: false,
             seed: r.next(),
           });
-          emit(cx + f.nx * 12, top.y1 - sh, cz + f.nz * 12, c, sw * sh * 0.04, clamp(sw * 1.4, 20, 60));
+          emit(cx + f.nx * 12, top.y1 - sh, cz + f.nz * 12, c, sw * sh * 0.04, clamp(sw * 1.4, 20, 60), 'sign');
         }
       } else if (top.roof === 'flat' && b.height > 10 && b.height < 90 && tw.len > 6 && r.chance(clamp((b.culture === 'cn' ? 0.08 : 0.14) + 0.25 * s.flash * prof.signs * 0.3 + (night ? 0.4 : 0), 0, night ? 0.85 : 0.55))) {
         // rooftop letters or a framed billboard facing the widest street side
@@ -454,7 +456,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           twoSided: !isBoard,
           seed: r.next(),
         });
-        emit(cx + tw.nx * 6, top.y1 + 3, cz + tw.nz * 6, c, sw * sh * 0.05, clamp(sw * 1.5, 10, 30));
+        emit(cx + tw.nx * 6, top.y1 + 3, cz + tw.nz * 6, c, sw * sh * 0.05, clamp(sw * 1.5, 10, 30), 'sign');
       }
     }
 
@@ -510,7 +512,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               program: 1,
             });
             megaScreens++;
-            emit(f.a[0] + f.tx * along + f.nx * 25, y, f.a[1] + f.tz * along + f.nz * 25, c, sw * sh * 0.0004, clamp(Math.max(sw, sh) * 0.8, 30, 70));
+            emit(f.a[0] + f.tx * along + f.nx * 25, y, f.a[1] + f.tz * along + f.nz * 25, c, sw * sh * 0.0004, clamp(Math.max(sw, sh) * 0.8, 30, 70), 'sign');
           }
         }
       }
@@ -558,7 +560,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
             program: glyphy ? 1 : 0,
           });
           roofHolos++;
-          emit(cx, top.y1 + hh * 0.5, cz, c, hw * hh * 0.004, clamp(hh, 10, 26));
+          emit(cx, top.y1 + hh * 0.5, cz, c, hw * hh * 0.004, clamp(hh, 10, 26), 'sign');
         }
       }
     }
@@ -693,7 +695,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           if (k < 0.05) continue;
           const cx = (w.a[0] + w.b[0]) / 2 + w.nx * 7;
           const cz = (w.a[1] + w.b[1]) / 2 + w.nz * 7;
-          emit(cx, y + h / 2, cz, lc, k, clamp(Math.max(w.len, h) * 0.6, 12, 55));
+          emit(cx, y + h / 2, cz, lc, k, clamp(Math.max(w.len, h) * 0.6, 12, 55), 'window');
         }
       }
       const cap = t.top ?? t.poly;
@@ -798,7 +800,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         if (r.chance(0.06 + 0.25 * s.grime * s.grime + 0.3 * Math.max(0, d.tune.decay))) continue; // dead lamp
         const h = d.kind === 'corporate' || d.kind === 'megablock' ? 9 : 7;
         kit('lamp', x, 0.15, zz, Math.atan2(nx, nz), 1, h, 1, lampCol, 3, r.next());
-        emit(x + nx * 1.6, h - 0.5, zz + nz * 1.6, lampCol, 1.6, 16);
+        emit(x + nx * 1.6, h - 0.5, zz + nz * 1.6, lampCol, 1.6, 16, 'lamp');
         if ((d.kind === 'luxury' || (d.kind === 'corporate' && r.chance(0.5)) || r.chance(Math.max(0, d.tune.budget) * 0.7)) && walk > 2.6 && !r.chance(Math.max(0, d.tune.decay) * 0.8)) {
           const tt = (k + 0.5) / (n + 1);
           if (tt < 1) kit('tree', lerp(x0, x1, tt) - nx * 1.4, 0.15, lerp(z0, z1, tt) - nz * 1.4, r.range(0, 6.28), r.range(2.2, 3.4), r.range(6, 9), 1, [0.05, 0.09, 0.06], 0, r.next());
@@ -834,7 +836,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           const x = onX ? lerp(R.x0 + 4, R.x1 - 4, along) : cx + r.range(-2, 2);
           const zz = onX ? cz + r.range(-2, 2) : lerp(R.z0 + 4, R.z1 - 4, along);
           kit('lamp', x, 0.15, zz, r.range(0, 6.28), 1, 4.5, 1, [1, 0.8, 0.55], 3, r.next());
-          emit(x, 4, zz, [1, 0.78, 0.5], 1.1, 11);
+          emit(x, 4, zz, [1, 0.78, 0.5], 1.1, 11, 'lamp');
           if (r.chance(0.5)) kit('box', x + 1.4, 0.15, zz, r.range(0, 6.28), 1.8, 0.45, 0.6, [0.2, 0.14, 0.1], 0, r.next());
         }
       }
@@ -847,7 +849,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         const sh = sw * r.range(1.1, 1.8);
         const ang = r.range(0, Math.PI * 2);
         signs.push({ kind: 'holo', culture: 'us', x: cx, y: sh / 2 + 3, z: cz, nx: Math.cos(ang), nz: Math.sin(ang), wnx: 0, wnz: 0, w: sw, h: sh, depth: 0, arm: 2.85, text: '', glyphs: [], vertical: false, col: c, col2: d.palette[r.int(d.palette.length)] as RGB, intensity: 1.6 + s.flash, flicker: 0, lightbox: false, frame: false, twoSided: true, seed: r.next() });
-        emit(cx, sh / 2 + 3, cz, c, sw * sh * 0.02, 40);
+        emit(cx, sh / 2 + 3, cz, c, sw * sh * 0.02, 40, 'sign');
       }
     } else if (blk.open === 'yard') {
       const R = blk.rect;
@@ -876,7 +878,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         kit('box', x, 0.1, zz, r.range(0, 6), r.range(1, 4), r.range(0.4, 1.6), r.range(1, 4), [0.3, 0.28, 0.25], 0, r.next());
         if (r.chance(0.18)) {
           kit('barrel', x + 2, 0.15, zz + 1, 0, 0.32, 0.9, 0.32, [0.3, 0.12, 0.06], 0, r.next());
-          emit(x + 2, 1.6, zz + 1, [1, 0.42, 0.12], 2.2, 12);
+          emit(x + 2, 1.6, zz + 1, [1, 0.42, 0.12], 2.2, 12, 'fire');
           steam.push({ x: x + 2, z: zz + 1, h: 0.95, seed: r.next() });
         }
       }
@@ -900,7 +902,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         const b2 = st.axis === 'x' ? [p + r.range(-2, 2), y1, st.pos + half] : [st.pos + half, y1, p + r.range(-2, 2)];
         const c: RGB = cn ? [1, 0.12, 0.06] : jp ? [1, 0.85, 0.6] : r.pick([[1, 0.3, 0.7], [1, 0.75, 0.35], [0.5, 0.6, 1]] as RGB[]);
         structures.push({ kind: 'cables', p: [a[0] as number, a[1] as number, a[2] as number, b2[0] as number, b2[1] as number, b2[2] as number, r.range(0.4, 1.0), 1], col: c, col2: c, seed: r.next() });
-        emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, c, 0.7, 10);
+        emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, c, 0.7, 10, 'festoon');
       }
     } else if (jp || cn || d.kind === 'decayed') {
       for (let p = st.lo + r.range(8, 16); p < st.hi - 8; p += r.range(9, 18)) {
@@ -910,10 +912,10 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         const b2 = st.axis === 'x' ? [p + r.range(-3, 3), y1, st.pos + half] : [st.pos + half, y1, p + r.range(-3, 3)];
         if (cn && r.chance(0.3)) {
           structures.push({ kind: 'cables', p: [a[0] as number, a[1] as number, a[2] as number, b2[0] as number, b2[1] as number, b2[2] as number, r.range(0.6, 1.4), 1], col: [1, 0.12, 0.06], col2: [1, 0.5, 0.15], seed: r.next() });
-          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.25, 0.1], 1.6, 10);
+          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.25, 0.1], 1.6, 10, 'festoon');
         } else if (jp && r.chance(0.2)) {
           structures.push({ kind: 'cables', p: [a[0] as number, a[1] as number, a[2] as number, b2[0] as number, b2[1] as number, b2[2] as number, r.range(0.5, 1.1), 1], col: [1, 0.85, 0.6], col2: [1, 0.55, 0.3], seed: r.next() });
-          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.7, 0.4], 1.2, 10);
+          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.7, 0.4], 1.2, 10, 'festoon');
         } else if (jp || r.chance(0.35)) {
           structures.push({ kind: 'wires', p: [a[0] as number, a[1] as number + 1.5, a[2] as number, b2[0] as number, b2[1] as number + 1.5, b2[2] as number, r.range(0.4, 1.2), r.intRange(2, 6)], col: [0.02, 0.02, 0.02], col2: [0, 0, 0], seed: r.next() });
         }
