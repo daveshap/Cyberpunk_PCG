@@ -19,6 +19,10 @@ tile, render, brick, cast concrete, cladding, corrugated metal and stone walls w
 sill, damp at the foot, rust, cracks, posters and graffiti; membrane, gravel and paver roofs; asphalt with
 cracks, cuts, oil and gutters; worn pavers and kerbs.
 
+Every sign, street lamp, fire and festoon string also lights the walls, pavement and cars round it in its own
+colour, and the humid air glows round it (see **Light and air** below). The haze is thick enough that the city
+fades with distance: near streets are lit by the signs in them, and far towers sink into dark air.
+
 The city is built the way Unreal's PCG / City Sample builds one: a **zone graph** decides where each
 district goes, and each district's **attribute table** drives everything downstream. That covers street
 grids, lots, building archetypes, facades, signage, clutter, light, fog and the sky glow. A second,
@@ -137,6 +141,29 @@ materials show where light falls: relief is shaded against the likely light (the
 the nearest lamp for the ground), street light pools light the foot of walls, and lit windows light their
 reveals and the wall round them. `?fill=0.5` adds a flat white fill light to inspect materials.
 
+## Light and air
+
+- **Local lights**: every sign is an area light, and street lamps, barrel fires and festoon strings are point
+  lights: about 35,000 in a default city. A sign's light comes from the nearest point on its panel, lifted off
+  the wall a little like neon on a board. The lights fall off with distance (a windowed inverse square), light
+  walls, pavement, kits, props and cars in their own colour, and flicker with their sign. A sign lights only the
+  street side of the wall it hangs on, so it never shines through its own building. Each pixel finds its lights
+  in a world grid baked with the city (`src/render/locallights.ts`): every 10 m cell lists the 12 street-level
+  lights and 4 high ones (ad walls, rooftop signs) that put the most light there. Past about 700 m the baked light
+  volume takes over.
+- **Halos**: each frame the 40 lights that matter most to the view glow in the air round them. Single scattering
+  from a light has a closed form along a view ray, so the haze pass works out each light's glow exactly, up to
+  the surface the ray hits and only on the street side of the light's wall. A light you look toward glows more
+  (forward scattering), and rain thickens the glow. Ad walls get a soft glow round the whole panel, and the bloom
+  has a soft knee, so bright signs carry a halo of glare.
+- **Distance**: the haze is thicker (extinction about 0.0016 per metre at street level, thinning over about 220 m
+  of height) and its ambient stays dark. A tower 500 m away keeps about half its light, so the city fades into
+  dark air with distance instead of standing crisp to the horizon. Near the camera the coarse light volume only
+  adds a little bounce light, so walls are bright next to their lights and dark away from them.
+- **Quality**: `high` and `ultra` use all of it. `medium` (the WebGL2 default) takes the 6 most important lights
+  per cell within about 420 m and 16 halos; `low` turns local lights and halos off and lights the city from the
+  baked light alone. The frame-rate guard steps down through these levels on a slow machine.
+
 ## Dials
 
 **Style** (whole city; each axis is one of the genre's visual eras, see `docs/ART_BIBLE.md`)
@@ -174,7 +201,9 @@ Rust belt, Gilded coast.
 `ssr` / `nossr`, `auto` (start in guided flight), `fog`, `rain`, `neon`, `exposure`, `dry`, `tm=agx`, and for
 screenshots and debugging: `still`, `nohud`, `notaa`, `debug=fog|depth`, `hdbg=tmax|zone|light`,
 `hide=name,prefix*`, `holot` (freeze the holograms at a clock time), `screen=N` (force every LED screen to one
-scene), `lightgain` (scale the baked city light), `fill` (a flat white fill light to inspect materials).
+scene), `lightgain` (scale the baked city light), `fill` (a flat white fill light to inspect materials), and
+`t.<dial>=value` to set a lighting dial by name (`t.halo` for the glow's strength, `t.halos` for how many lights
+glow, `t.localgain`, `t.fogDensity`, `t.bloomStrength`...).
 
 ## How it is built
 
@@ -200,9 +229,11 @@ buildCityRender(spec)                          src/render
   a baked light atlas (32 height layers) + ground light map + district zone map,
   one facade shader (parallax windows into raymarched rooms, LOD to averages, sloped walls),
   procedural surfaces: per-style wall substrates and weathering, roofs, asphalt and pavers, worn kits,
+  local lights (signs, lamps, fires and festoons from a world grid) on every lit surface,
   vertex-animated holograms and light pillars, instanced flyers and searchlight cones,
   point-light sprites (lamps, beacons, GPU-animated ground traffic) that keep their light with distance,
-  post: volumetric haze (raymarched, district-tinted, analytic far tail), screen-space reflections,
+  post: volumetric haze (raymarched, district-tinted, analytic far tail, closed-form halos round the lights
+  that matter most to the view), screen-space reflections,
   neon glow layer, TRAA, bloom, grade, chromatic edge, vignette, grain
 ```
 

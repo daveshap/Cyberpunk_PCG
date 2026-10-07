@@ -5,8 +5,12 @@
 // a:<archetype>, holo:<i>, mega:<i>, rholo:<i>, incident:<i>, fly:<kind>:<i>[:back:side:up], and pose
 // (with --pose "x,y,z,yaw,pitch"), harbour (from the water at the waterfront skyline), and material close-ups:
 // wall:<style>, close:<style> (facade styles glass, panel, grid, shop, balcony, metal, raw, lux), kerb, roofs:<district kind>.
-// Append @screen=N to a view to force the LED screens to scene N. Add --extra "fill=0.5" for a flat white fill light.
-// Flags: --w --h --seed --extra "k=v&..." --frames N --url --backend gl|gpu --dom 1 --hud 1 --perf N (ms per frame)
+// Append @screen=N to a view to force the LED screens to scene N, or @name=value&... to set lighting dials for
+// that shot (main.ts tune(): post uniforms such as halo, scatter, bloomStrength; U.* such as fogDensity; local lights
+// such as localgain, halos and kMax; near=0&far=1 turns the local lights off). Add --extra "fill=0.5" for a flat
+// white fill light.
+// Flags: --w --h --seed --extra "k=v&..." --frames N --url --backend gl|gpu --dom 1 --hud 1 --perf N (ms per frame,
+// posed views only; timings drift between runs, so compare views timed in the same run)
 import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -325,11 +329,16 @@ const custom = opt('pose');
 if (custom && poses) poses.pose = String(custom).split(',').map(Number);
 
 for (const raw of views) {
-  // view@screen=N forces the LED screens to scene N for this shot
+  // view@screen=N forces the LED screens to scene N; view@halo=150&localgain=0.5 sets
+  // lighting dials by name for this shot only (main.ts tune())
   const [v, extra] = raw.split('@');
-  const scr = extra && extra.startsWith('screen=') ? Number(extra.slice(7)) : -1;
+  const ex = new URLSearchParams(extra ?? '');
+  const scr = ex.has('screen') ? Number(ex.get('screen')) : -1;
+  ex.delete('screen');
   await page.evaluate((n) => window.__game && window.__game.screenScene && window.__game.screenScene(n), scr);
-  const file = path.join(outDir, `${raw.replace(/:/g, '-').replace('@', '_').replace('=', '')}.png`);
+  const dials = Object.fromEntries([...ex].map(([k, x]) => [k, Number(x)]));
+  const restore = await page.evaluate((o) => (window.__game && window.__game.tune ? window.__game.tune(o) : {}), dials);
+  const file = path.join(outDir, `${raw.replace(/:/g, '-').replace('@', '_').replace(/=/g, '').replace(/&/g, '_')}.png`);
   if (v.startsWith('fly:')) {
     // fly:<kind>:<i>[:back:side:up] rides along with a flyer
     const [, kind, idx, back, side, up] = v.split(':');
@@ -367,6 +376,7 @@ for (const raw of views) {
     const url = await page.evaluate(() => window.__game.capture());
     fs.writeFileSync(file, Buffer.from(url.split(',')[1], 'base64'));
   }
+  await page.evaluate((o) => window.__game && window.__game.tune && window.__game.tune(o), restore);
   console.log('wrote', file);
 }
 fs.writeFileSync(path.join(outDir, 'log.txt'), logs.join('\n'));

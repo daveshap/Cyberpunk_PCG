@@ -24,7 +24,9 @@ geometry, textures and lighting are all generated.
   the water; pair it with `--extra "fov=28"` (the lens) for the photo comp. See `docs/COMPS.md`. Material
   close-ups: `wall:<style>` (24 m), `close:<style>` (7 m, low on the wall; styles glass, panel, grid, shop,
   balcony, metal, raw, lux), `kerb`, `roofs:<district kind>`; add `--extra "fill=0.5"` for a flat white fill
-  light, and `--perf N` to print the ms per frame of each view.
+  light, and `--perf N` to print the ms per frame of each view. Append `@halo=40&localgain=0.5` to a view to
+  shoot it with those lighting dials (any name `tune()` in `game/main.ts` knows: post-pass uniforms, `U.*`,
+  `LLU.*`), so one page load can compare several settings; `?t.<dial>=value` does the same in the app.
 - `node scripts/wgsl-check.mjs` captures every WGSL module the app compiles and flags values read outside the
   `if` branch that computed them (see the TSL gotchas). Run it after touching a material with `If()`.
 - `npm run artifact` writes one self-contained HTML fragment to `dist-artifact/index.html` (`--page` also
@@ -64,6 +66,22 @@ geometry, textures and lighting are all generated.
 9. City light is baked on the CPU into a **2D atlas of 32 height layers** (`TEX.vol`, sampled by
    `volSample` in `render/tsl.ts`), a 1024² ground map and a district zone map. Do not use 3D textures: they
    fail to upload on some WebGPU implementations (the page renders black).
+10. Local lights (`render/locallights.ts`): signs (from their `SignSpec`) and the emitters tagged `src: 'lamp' |
+    'fire' | 'festoon'` are baked with the city into float textures: per light its position, range, power, size,
+    emission lobe, host wall plane and flicker; per 10 m cell the 12 street-level and 4 high lights that matter
+    most there, read with `textureLoad` (works on both backends). Shading calls `localDiffuse(p, n)`: `shadeN()`
+    and `shade()` do it themselves; a material that shades several layers at one point computes it once and passes
+    it in (the facade does). Near the camera the ground map without those sources (`TEX.groundNear`) and a smaller
+    coarse spill (`LLU.spillNear`) avoid counting their light twice; past `LLU.far` the coarse volume carries it.
+    Only diffuse light needs that split (`lightAtDiffuse`); reflections, specular and glow layers read the full
+    map (`lightAt`), and the haze fades the ground map out near the camera (`hazeLight`). Tag new street-level
+    emitters with `src` so they light locally. Each frame `updateHalos()` hands the lights that matter most to the
+    view (`LLU.halos` of them, at most 40) to the haze pass (`HALO`), which adds their closed-form glow in the air
+    and skips the rays that pass far from a light. `QUALITY[q].local` in `game/main.ts` sets the reach,
+    `LLU.kMax` and `LLU.halos` per quality level (`low` turns them off). Post passes render with their own
+    camera, so distance fades read `U.camPos`, not `cameraPosition`. Time a change with `--perf` and dials
+    (`s:jpmarket@halos=0`; `@near=0&far=1` turns the local lights off), interleaving the views in one run: the
+    software renderer's timings drift between runs.
 
 ## TSL gotchas
 
@@ -88,8 +106,10 @@ geometry, textures and lighting are all generated.
 
 ## Look rules
 
-See `docs/ART_BIBLE.md` (including its Materials section) and the comp notes in `docs/COMPS.md`. In short: each district must read as itself from the air and from the street
+See `docs/ART_BIBLE.md` (including its Materials and Light sections) and the comp notes in `docs/COMPS.md`. In short: each district must read as itself from the air and from the street
 (fog tint, sky glow, palette, massing, signage density and type). Neon should pop against darker walls, so
-when a scene washes out, lower light spill before you raise anything else. Distance gets darker, never
-brighter: the haze's ambient terms must stay under the dark walls and the night sky. Keep names, logos and glyphs
+when a scene washes out, lower light spill before you raise anything else. Signs light what is next to them and
+little else: keep their light local, their halos compact and the bloom's knee soft, or the street fills with a
+milky veil. Distance gets darker, never brighter: the haze's ambient terms must stay under the dark walls and
+the night sky. Keep names, logos and glyphs
 original: no real brands and no game IP.
