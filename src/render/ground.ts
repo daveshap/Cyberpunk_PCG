@@ -37,7 +37,7 @@ import {
 } from 'three/tsl';
 import type { Block, CitySpec, RoadPiece, Street } from '../core/types';
 import { MeshBuilder } from './geometry';
-import { U, fbm3o, fresnel, hash12, hash22, keepAlpha, lightAt, rainRipples, reflectedLight, shade, skyColor, vnoise, waterNormal } from './tsl';
+import { U, fbm3o, fresnel, hash12, hash22, keepAlpha, lightAt, rainRipples, reflectedLight, shade, skyColor, vnoise, waterNormal, groundAt } from './tsl';
 
 export const ROAD_EXTRAS = { aRd: 4, aRj: 4 };
 export const PLATE_EXTRAS = { aP0: 4, aP1: 4, aP2: 4 };
@@ -108,7 +108,11 @@ const wetSurface = Fn(([alb, wp, wetK, puddle]) => {
   // on, the post pass does this instead (k travels in the alpha channel)
   const reflL = lightAt(wp.add(R.mul(10.0))).mul(0.7).add(lightAt(wp.add(R.mul(30.0))).mul(0.5));
   const reflS = skyColor(vec3(R.x, max(R.y, float(0.02)), R.z));
-  const diffuse = shade(albW, n, wp, float(0.0), float(1.0));
+  // pools of light under lamps and in front of shops: the ground map is fine (3 m), so
+  // the street keeps its full response to it (seen from above, lit streets are what
+  // draws the city's grid at night)
+  const pool = groundAt(wp).mul(albW).mul(1.15);
+  const diffuse = shade(albW, n, wp, float(0.0), float(1.0)).add(pool);
   return vec4(diffuse.add(reflL.add(reflS).mul(k).mul(oneMinus(U.ssrOn))), oneMinus(k));
 });
 
@@ -130,7 +134,7 @@ export function makeRoadMaterial(): THREE.MeshBasicNodeMaterial {
     // asphalt
     const n1 = fbm3o(p.mul(0.08));
     const n2 = vnoise(p.mul(1.9));
-    const alb = vec3(0.032, 0.033, 0.036).mul(mix(0.75, 1.25, n1)).mul(mix(0.9, 1.08, n2)).toVar();
+    const alb = vec3(0.05, 0.05, 0.054).mul(mix(0.75, 1.25, n1)).mul(mix(0.9, 1.08, n2)).toVar();
     // repair patches and tyre tracks
     const patch = step(0.72, vnoise(p.mul(0.045).add(7.0)));
     alb.assign(mix(alb, alb.mul(1.35), patch.mul(0.6)));
@@ -265,7 +269,7 @@ export function makeLandMaterial(): THREE.MeshBasicNodeMaterial {
     const lit = step(0.93, hash12(cell)).mul(away).mul(dotK);
     const lampC = mix(vec3(1.0, 0.55, 0.22), vec3(0.75, 0.85, 1.0), step(0.6, hash12(cell.add(3.3))));
     // plus the faint sodium wash of streets seen from afar (light pollution on the ground)
-    const e = lampC.mul(lit).mul(3.0).add(vec3(0.05, 0.028, 0.014).mul(away).mul(vnoise(p.mul(0.012)).mul(0.8).add(0.4)));
+    const e = lampC.mul(lit).mul(3.0).add(vec3(0.009, 0.005, 0.0024).mul(away).mul(vnoise(p.mul(0.012)).mul(0.8).add(0.4)));
     return vec4(shade(alb, vec3(0, 1, 0), wp, float(0.02), float(1.0)).add(e), 1.0);
   })();
   return m;
