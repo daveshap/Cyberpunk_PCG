@@ -59,6 +59,8 @@ export const LLU = {
   far: uniform(760),
   /** Share of the coarse light volume that still lights surfaces near the camera (bounce, window glow). */
   spillNear: uniform(0.08),
+  /** How many of a cell's street-level lights each pixel takes, most important first (quality). */
+  kMax: uniform(LL.K),
   /** How many lights glow in the haze each frame (0 turns the halos off; at most HALO_N). Read on the CPU. */
   halos: { value: 40 },
 };
@@ -126,6 +128,9 @@ export const localLight = Fn(([p, nb]) => {
     });
     If(p.y.lessThan(LL.LOW_TOP), () => {
       Loop(LL.K, ({ i }) => {
+        If(float(i).greaterThanEqual(LLU.kMax), () => {
+          Break();
+        });
         const id = textureLoad(T_LOW, ivec2(cx.mul(LL.K).add(i), cz)).r;
         If(id.lessThan(0.0), () => {
           Break();
