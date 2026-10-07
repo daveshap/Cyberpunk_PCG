@@ -44,7 +44,8 @@ import {
   vec2,
   vec3,
 } from 'three/tsl';
-import { U, groundAt, hash12, hash22, lightAt, skyColor, vnoise } from './tsl';
+import { U, groundAt, hash12, hash22, lightAt, lightAtDiffuse, skyColor, vnoise } from './tsl';
+import { LLU, localDiffuse, localK } from './locallights';
 import { ATLAS, glyphAtlas } from './glyphatlas';
 
 /** Perceived brightness of a linear colour. */
@@ -216,12 +217,17 @@ export const nightLightDir = (n, p) => {
  * direction, so relief is shaded as the ratio of nb to the flat surface under Ld:
  * the overall level stays where the volume puts it, and the relief shows where
  * the light is. Reflections and Fresnel use nb.
+ *
+ * Near the camera the signs, lamps and fires round the point light it directly
+ * (locallights.ts), each from its own direction, so relief catches each of them. A
+ * material that shades several layers at one point (the facade) computes that light
+ * once and passes it as Eext (then the Ld relief ratio applies to it).
  */
-export const shadeN = Fn(([albedo, n, nb, p, spec, rough, cav, Ld]) => {
+export const shadeN = Fn(([albedo, n, nb, p, spec, rough, cav, Ld, Eext]) => {
   const upK = nb.y.mul(0.5).add(0.5);
   const sky = vec3(U.skyHorizon).mul(0.25).add(vec3(U.ambient));
   const amb = mix(vec3(U.ambient).mul(0.6), sky, upK);
-  const L = lightAt(p.add(n.mul(2.0)));
+  const L = lightAtDiffuse(p.add(n.mul(2.0)));
   const ao = mix(0.55, 1.0, smoothstep(0.0, 3.0, p.y)).mul(cav);
   const Lw = L.div(dot(L, vec3(0.3, 0.5, 0.2)).mul(0.8).add(1.0));
   const rel = clamp(dot(nb, Ld).add(0.3).div(max(dot(n, Ld).add(0.3), float(0.05))), 0.3, 2.0);
@@ -229,7 +235,9 @@ export const shadeN = Fn(([albedo, n, nb, p, spec, rough, cav, Ld]) => {
   // map) also light the first few metres of the walls and things standing round them
   const wallK = smoothstep(0.3, 0.7, oneMinus(abs(n.y)));
   const footL = groundAt(p.add(n.mul(1.2))).mul(exp(max(p.y.sub(0.5), float(0.0)).mul(-0.45))).mul(0.22).mul(wallK);
-  const diffuse = albedo.mul(amb.add(Lw.mul(0.17).add(footL).add(U.fill).mul(rel))).mul(ao);
+  const spillK = mix(float(0.17), LLU.spillNear, localK(p));
+  const Eloc = Eext === undefined ? localDiffuse(p, nb) : Eext.mul(rel);
+  const diffuse = albedo.mul(amb.add(Lw.mul(spillK).add(footL).add(U.fill).mul(rel)).mul(ao).add(Eloc.mul(cav)));
   const V = normalize(cameraPosition.sub(p));
   const ndv = clamp(dot(nb, V), 0.0, 1.0);
   const R = V.negate().sub(nb.mul(dot(V.negate(), nb).mul(2.0)));
