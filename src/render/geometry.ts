@@ -398,10 +398,13 @@ export function addWall(b: MeshBuilder, ax: number, az: number, bx: number, bz: 
   return len;
 }
 
-/** Sets the current prop-material attributes: albedo (or emissive colour), emissive gain, specular, twinkle. */
-export function setProp(b: MeshBuilder, r: number, g: number, bl: number, emissive = 0, spec = 0.25, twinkle = 0): void {
+/**
+ * Sets the current prop-material attributes: albedo (or emissive colour), emissive gain,
+ * specular and surface kind (0 plain, 1 clay roof tiles, 2 fabric, 3 metal roofing, 4 glazing).
+ */
+export function setProp(b: MeshBuilder, r: number, g: number, bl: number, emissive = 0, spec = 0.25, kind = 0): void {
   b.set('aAlb', r, g, bl, emissive);
-  b.set('aP', spec, twinkle);
+  b.set('aP', spec, kind);
 }
 
 export const PROP_EXTRAS = { aAlb: 4, aP: 2 };

@@ -11,18 +11,25 @@
  * Sloped pieces (roofs, awnings, wires) go into a merged "prop" mesh.
  */
 import * as THREE from 'three/webgpu';
-import { Fn, attribute, faceDirection, normalWorld, normalize, positionWorld, vec4, float } from 'three/tsl';
+import { Fn, abs, attribute, dot, faceDirection, floor, fract, fwidth, mix, normalWorld, normalize, oneMinus, positionWorld, sin, smoothstep, step, vec2, vec3, vec4, float } from 'three/tsl';
 import type { Building, CitySpec, Highway, RGB, Structure, Tier, Vec2 } from '../core/types';
 import { Rng, clamp, hash01 } from '../core/rng';
 import { MeshBuilder, setProp } from './geometry';
 import { CLS, type Inst, type KitGeom, type LodClass } from './kits';
-import { U, shade } from './tsl';
+import { U, hash12, shade } from './tsl';
+import { fbmF, joints, nightLightDir, shadeN, streakNoise } from './surface';
 
 export type KitSink = (geom: KitGeom, lod: LodClass, i: Inst) => void;
 export type BuilderFor = (x: number, z: number) => MeshBuilder;
 
 export const PROP2_EXTRAS = { aAlb: 4, aP: 2 };
 
+/**
+ * Props: sloped and hanging pieces. aP = (spec, kind): 0 plain (wires), 1 clay
+ * roof tiles (barrel courses, broken tiles, moss), 2 fabric (awnings, laundry:
+ * weave, stripes, folds, water stains), 3 metal roofing (standing seams, rust),
+ * 4 glazing (dirty).
+ */
 export function makePropMaterial(): THREE.MeshBasicNodeMaterial {
   const m = new THREE.MeshBasicNodeMaterial();
   m.name = 'props';
@@ -31,10 +38,56 @@ export function makePropMaterial(): THREE.MeshBasicNodeMaterial {
   m.colorNode = Fn(() => {
     const A = attribute('aAlb', 'vec4');
     const P = attribute('aP', 'vec2');
+    const wp = positionWorld;
+    const mpp = fwidth(wp.x).max(fwidth(wp.y)).max(fwidth(wp.z)).max(1e-4);
     // two-sided: light the face we are looking at (a back face would otherwise
     // see ndv = 0 and turn into a full-strength mirror)
     const n = normalize(normalWorld).mul(faceDirection);
-    const lit = shade(A.xyz, n, positionWorld, P.x, float(0.6));
+    const kind = floor(P.y.add(0.5));
+    // a frame on the surface: across the slope (along the eave) and down it
+    const dn = normalize(vec2(n.x, n.z).add(vec2(1e-4, 0.0)));
+    const acrossC = dot(wp.xz, vec2(dn.y.negate(), dn.x));
+    const downC = wp.y.negate().add(dot(wp.xz, dn).mul(0.2));
+    const alb = A.xyz.toVar();
+    const spec = P.x.toVar();
+    const rough = float(0.6).toVar();
+    const cav = float(1.0).toVar();
+    const is = (k) => step(abs(kind.sub(k)), float(0.1));
+    // clay roof tiles: barrel courses, a broken or replaced tile here and there, moss
+    const tK = is(1);
+    const barrel = sin(acrossC.div(0.22).mul(6.2831853)).mul(0.5).add(0.5);
+    const course = joints(wp.y, 0.28, 0.012, mpp);
+    const tileId = vec2(floor(acrossC.div(0.22)), floor(wp.y.div(0.28)));
+    const th = hash12(tileId);
+    const tileVar = smoothstep(0.12, 0.05, mpp);
+    const tileC = A.xyz.mul(mix(1.0, mix(0.8, 1.2, th).mul(mix(1.0, 0.6, step(0.96, th))), tileVar)).mul(mix(1.0, mix(0.65, 1.1, barrel), smoothstep(0.1, 0.04, mpp)));
+    const tMoss = smoothstep(0.5, 0.7, fbmF(wp.xz.mul(0.8).add(wp.y), mpp.mul(0.8)));
+    alb.assign(mix(alb, mix(mix(tileC, tileC.mul(0.45), course), vec3(0.03, 0.045, 0.025), tMoss.mul(0.6)), tK));
+    cav.assign(mix(cav, mix(1.0, 0.6, course), tK));
+    // fabric: weave, stripes on some awnings, folds on laundry, water stains and dirt runs
+    const fK = is(2);
+    const weave = mix(abs(sin(acrossC.mul(900.0))).mul(abs(sin(downC.mul(900.0)))).mul(0.25).add(0.85), float(0.9), smoothstep(0.002, 0.006, mpp));
+    const stripeOn = step(0.55, hash12(floor(wp.xz.div(6.0))));
+    const stripe = step(0.5, fract(acrossC.div(0.5))).mul(stripeOn);
+    const fabC = mix(A.xyz, vec3(0.55, 0.53, 0.5), stripe.mul(0.8)).mul(weave);
+    const stains = smoothstep(0.5, 0.72, fbmF(vec2(acrossC.mul(0.9), downC.mul(2.5)), mpp.mul(2.5)));
+    const runs = smoothstep(0.42, 0.78, streakNoise(acrossC, downC, 5.0, 0.5));
+    const sunFade = smoothstep(0.45, 0.75, fbmF(vec2(acrossC, downC).mul(0.3).add(7.0), mpp.mul(0.3)));
+    const fabW = fabC.mul(oneMinus(stains.mul(0.5))).mul(oneMinus(runs.mul(0.45)));
+    alb.assign(mix(alb, mix(fabW, fabW.mul(1.25).add(0.02).mul(vec3(0.95, 0.95, 0.9)), sunFade.mul(0.45)), fK));
+    rough.assign(mix(rough, float(0.95), fK));
+    // metal roofing: standing seams down the slope, rust in the pans
+    const mK = is(3);
+    const seam = joints(acrossC, 0.6, 0.012, mpp);
+    const rust = smoothstep(0.55, 0.72, fbmF(vec2(acrossC.mul(1.5), downC.mul(0.6)), mpp.mul(1.5)));
+    alb.assign(mix(alb, mix(mix(A.xyz, vec3(0.16, 0.06, 0.025), rust), A.xyz.mul(1.4), seam), mK));
+    rough.assign(mix(rough, mix(float(0.45), float(0.95), rust), mK));
+    // glazing: a dirt film thickest at the bottom of each pane
+    const gK = is(4);
+    const film = smoothstep(0.35, 0.8, streakNoise(acrossC, downC, 3.0, 0.4)).mul(0.6);
+    alb.assign(mix(alb, mix(alb, vec3(0.06, 0.055, 0.05), film), gK));
+    rough.assign(mix(rough, float(0.12), gK));
+    const lit = shadeN(alb, n, n, wp, spec, rough, cav, nightLightDir(n, wp));
     return vec4(lit.add(A.xyz.mul(A.w).mul(U.neon)), 1.0);
   })();
   return m;
@@ -204,7 +257,7 @@ function addPagoda(t: Tier, b: Building, propFor: BuilderFor, K: KitSink, r: Rng
   const inset = Math.min(w, d) / 2;
   const B = propFor((x0 + x1) / 2, (z0 + z1) / 2);
   const tile: RGB = b.culture === 'cn' ? [0.08, 0.06, 0.05] : [0.05, 0.055, 0.06];
-  setProp(B, tile[0], tile[1], tile[2], 0, 0.35);
+  setProp(B, tile[0], tile[1], tile[2], 0, 0.35, 1);
   // ridge endpoints
   const ra: [number, number, number] = alongX ? [x0 + inset, y + h, (z0 + z1) / 2] : [(x0 + x1) / 2, y + h, z0 + inset];
   const rb: [number, number, number] = alongX ? [x1 - inset, y + h, (z0 + z1) / 2] : [(x0 + x1) / 2, y + h, z1 - inset];
@@ -431,7 +484,7 @@ export function addStructure(s: Structure, K: KitSink, propFor: BuilderFor): voi
       for (let q = L0; q < L1 - 0.5; q += tooth) {
         const q1 = Math.min(L1, q + tooth);
         // sloped roof panel and a glazed vertical face
-        setProp(B, s.col[0] * 0.8, s.col[1] * 0.8, s.col[2] * 0.8, 0, 0.3);
+        setProp(B, s.col[0] * 0.8, s.col[1] * 0.8, s.col[2] * 0.8, 0, 0.3, 3);
         const P = (a: number, yy: number, bb: number): [number, number, number] => (alongX ? [a, yy, bb] : [bb, yy, a]);
         const A0 = alongX ? x0 : z0;
         const A1 = alongX ? x1 : z1;
@@ -445,7 +498,7 @@ export function addStructure(s: Structure, K: KitSink, propFor: BuilderFor): voi
         const ic = B.vert(s2[0], s2[1], s2[2], n1[0]!, n1[1]!, n1[2]!, 0, 0);
         const id = B.vert(s3[0], s3[1], s3[2], n1[0]!, n1[1]!, n1[2]!, 0, 0);
         B.quad(ia, ib, ic, id);
-        setProp(B, s.col2[0] * 0.2, s.col2[1] * 0.2, s.col2[2] * 0.2, 0.55, 0.6);
+        setProp(B, s.col2[0] * 0.2, s.col2[1] * 0.2, s.col2[2] * 0.2, 0.55, 0.6, 4);
         const g0 = P(A0, y, q1);
         const g1 = P(A1, y, q1);
         const n2 = alongX ? [0, 0, 1] : [1, 0, 0];
@@ -466,7 +519,7 @@ export function addStructure(s: Structure, K: KitSink, propFor: BuilderFor): voi
       const nx = tz;
       const nz = -tx;
       const B = propFor((ax + bxx) / 2, (az + bz) / 2);
-      setProp(B, s.col[0] * 0.35, s.col[1] * 0.35, s.col[2] * 0.35, 0.15, 0.1);
+      setProp(B, s.col[0] * 0.35, s.col[1] * 0.35, s.col[2] * 0.35, 0.15, 0.1, 2);
       const drop = depth * 0.45;
       const v0 = B.vert(ax, y, az, nx * 0.4, 0.9, nz * 0.4, 0, 0);
       const v1 = B.vert(bxx, y, bz, nx * 0.4, 0.9, nz * 0.4, 0, 0);
@@ -502,7 +555,7 @@ export function addStructure(s: Structure, K: KitSink, propFor: BuilderFor): voi
         const drop = 0.45 + hash01(iseed, i, 4) * 0.7;
         const k = hash01(iseed, i, 5);
         const c = k < 0.4 ? s.col : k < 0.75 ? s.col2 : ([0.62, 0.6, 0.56] as RGB);
-        setProp(B, c[0], c[1], c[2], 0, 0.05);
+        setProp(B, c[0], c[1], c[2], 0, 0.05, 2);
         const ax = x0 + (x1 - x0) * t0;
         const az = z0 + (z1 - z0) * t0;
         const bx2 = x0 + (x1 - x0) * t1;
