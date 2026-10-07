@@ -38,13 +38,17 @@ import {
   vec3,
   vec4,
 } from 'three/tsl';
+import { LLU, localDiffuse, localK } from './locallights';
 
 export const U = {
   fogColor: uniform(new THREE.Color(0.06, 0.035, 0.09)),
-  /** Base extinction per metre at ground level. */
-  fogDensity: uniform(0.0009),
-  /** Height falloff (1/m). */
-  fogFalloff: uniform(0.0085),
+  /** Base extinction per metre at ground level (main.ts sets it from the haze dial). */
+  fogDensity: uniform(0.0016),
+  /**
+   * Height falloff (1/m): a scale height of about 220 m, so the smog wraps the towers
+   * too and they fade with distance instead of standing crisp above a thin ground fog.
+   */
+  fogFalloff: uniform(0.0045),
   camY: uniform(60),
   rain: uniform(0.6),
   wet: uniform(1),
@@ -76,6 +80,12 @@ export const U = {
   screenScene: uniform(-1),
   /** Debug: flat white fill light on every lit surface (?fill=0.5) to inspect materials. */
   fill: uniform(0),
+  /**
+   * The scene camera's position, set each frame. Post passes render with their own
+   * quad camera, so anything that fades with distance from the viewer reads this
+   * instead of cameraPosition.
+   */
+  camPos: uniform(new THREE.Vector3()),
 };
 
 /**
@@ -116,13 +126,20 @@ function makeMap(n: number, half: boolean): THREE.DataTexture {
 
 export const TEX = {
   vol: makeVol(),
+  /** Every street-level emitter: the pools of light seen from afar. */
   ground: makeMap(LV.G, true),
+  /**
+   * The same without the emitters drawn as local lights (signs, lamps, fires,
+   * festoons): near the camera those light the ground themselves (locallights.ts).
+   */
+  groundNear: makeMap(LV.G, true),
   zone: makeMap(LV.Z, false),
 };
 
 export const T = {
   vol: texture(TEX.vol),
   ground: texture(TEX.ground),
+  groundNear: texture(TEX.groundNear),
   zone: texture(TEX.zone),
 };
 
@@ -294,6 +311,17 @@ export const fogAtten = Fn(([col, wpos]) => {
   return col.mul(fogTransmittance(wpos));
 });
 
+/**
+ * Attenuation for point lights (lamps, beacons, traffic). A point of light is far
+ * brighter than the walls round it, so through haze it fades to a dim point but stays
+ * visible long after the walls are gone (comps: night photos of hazy cities). With the
+ * haze as thick as it is, plain extinction would put out the far city's lights; the
+ * softened curve keeps them about where they were under the old, thinner haze.
+ */
+export const pointAtten = Fn(([col, wpos]) => {
+  return col.mul(pow(fogTransmittance(wpos), 0.6));
+});
+
 // -------------------------------------------------------------- light volume
 /** Normalised (u, w, v) coordinates of a world position in the light volume. */
 export const volCoord = Fn(([p]) => {
@@ -317,16 +345,42 @@ const volSample = Fn(([c]) => {
   return e.mul(e).mul(VOL_MAX);
 });
 
-/** Coloured light from the city's emitters at a world position (linear RGB). */
-export const lightAt = Fn(([p]) => {
+/**
+ * The ground light map at uv for a point p: near the camera without the sources the
+ * local lights draw themselves, the full map farther out where those fade.
+ */
+const groundMap = (uvG, p) => mix(T.groundNear.sample(uvG).rgb, T.ground.sample(uvG).rgb, oneMinus(localK(p)));
+
+/** The baked city light at p: the light volume, plus the ground map (`ground(uv)`) near the ground. */
+const cityLight = (p, ground) => {
   const c = volCoord(p);
   const vol = volSample(c);
   // fine detail near the ground from the 2D map, fading with height
-  const g = T.ground.sample(vec2(c.x, c.z)).rgb.mul(exp(max(p.y, float(0)).mul(-0.16)));
+  const g = ground(vec2(c.x, c.z)).mul(exp(max(p.y, float(0)).mul(-0.16)));
   // nothing outside the baked rectangle (the textures clamp to their edge texels)
   const inside = smoothstep(0.0, 0.02, c.x).mul(smoothstep(1.0, 0.98, c.x)).mul(smoothstep(0.0, 0.02, c.z)).mul(smoothstep(1.0, 0.98, c.z));
   return vol.add(g).mul(U.lightGain).mul(inside);
-});
+};
+
+/**
+ * Coloured light from the city's emitters at a world position (linear RGB): what
+ * reflections, specular and the glow layers see.
+ */
+export const lightAt = Fn(([p]) => cityLight(p, (uvG) => T.ground.sample(uvG).rgb));
+
+/**
+ * The same for diffuse lighting on surfaces: near the camera the ground map leaves out
+ * the signs, lamps, fires and festoons, which light surfaces themselves there as local
+ * lights (locallights.ts), so their light counts once.
+ */
+export const lightAtDiffuse = Fn(([p]) => cityLight(p, (uvG) => groundMap(uvG, p)));
+
+/**
+ * Light for the haze at p, with the ground map's share scaled by k. Near the camera a
+ * street's own signs and lamps glow in the air as halos (post.ts), and the ground map
+ * is little else at street level, so the haze fades its coarse copy of them out there.
+ */
+export const hazeLight = Fn(([p, k]) => cityLight(p, (uvG) => T.ground.sample(uvG).rgb.mul(k)));
 
 /**
  * Street-level light from the fine 2D ground map only (lamp and shop-front pools),
@@ -335,7 +389,7 @@ export const lightAt = Fn(([p]) => {
 export const groundAt = Fn(([p]) => {
   const c = volCoord(p);
   const inside = smoothstep(0.0, 0.02, c.x).mul(smoothstep(1.0, 0.98, c.x)).mul(smoothstep(0.0, 0.02, c.z)).mul(smoothstep(1.0, 0.98, c.z));
-  return T.ground.sample(vec2(c.x, c.z)).rgb.mul(U.lightGain).mul(inside);
+  return groundMap(vec2(c.x, c.z), p).mul(U.lightGain).mul(inside);
 });
 
 /** District fog tint (rgb) and density factor (a) at a world position. */
@@ -355,18 +409,22 @@ export const fresnel = Fn(([ndv, f0]) => {
  * and spill reflection for specular. `spec` is the specular weight (0 matte,
  * 1 polished), `rough` blurs the reflection toward the ambient.
  */
-export const shade = Fn(([albedo, n, p, spec, rough]) => {
+export const shade = Fn(([albedo, n, p, spec, rough, Eext]) => {
   const up = n.y.mul(0.5).add(0.5);
   const sky = vec3(U.skyHorizon).mul(0.25).add(vec3(U.ambient));
   const amb = mix(vec3(U.ambient).mul(0.6), sky, up);
-  const L = lightAt(p.add(n.mul(2.0)));
+  const L = lightAtDiffuse(p.add(n.mul(2.0)));
   const ao = mix(0.55, 1.0, smoothstep(0.0, 3.0, p.y));
   // walls are lit by the signs and lamps near them, not washed by them: the light
   // volume is coarse (13 m voxels), so its spill is kept low and knee'd (a packed
   // sign street must not flood whole facades) and the contrast comes from the
-  // emitters themselves (comps: Tokyo and Hong Kong side streets at night)
+  // emitters themselves (comps: Tokyo and Hong Kong side streets at night). Near the
+  // camera the signs and lamps light the surface directly (local lights), so the
+  // coarse spill backs off there to what is left: bounce light and the window glow.
   const Lw = L.div(dot(L, vec3(0.3, 0.5, 0.2)).mul(0.8).add(1.0));
-  const diffuse = albedo.mul(amb.add(Lw.mul(0.17)).add(U.fill).mul(ao));
+  const E = Eext ?? localDiffuse(p, n);
+  const spillK = mix(float(0.17), LLU.spillNear, localK(p));
+  const diffuse = albedo.mul(amb.add(Lw.mul(spillK)).add(U.fill).mul(ao).add(E));
   const V = normalize(cameraPosition.sub(p));
   const ndv = clamp(dot(n, V), 0.0, 1.0);
   const R = V.negate().sub(n.mul(dot(V.negate(), n).mul(2.0)));
