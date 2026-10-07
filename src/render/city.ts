@@ -20,6 +20,7 @@ import { GLYPH_EXTRAS, SCREEN_EXTRAS, addSign } from './signs';
 import { PROP2_EXTRAS, addHighway, addRelief, addStructure, highwayEmitters, makePropMaterial } from './structures';
 import { makeBeamMaterial, makeGlyphMaterial, makeHaloMaterial, makeHoloMaterial, makeInkMaterial, makeScreenMaterial, makeSteamMaterial, makeTubeMaterial } from './neonmats';
 import { bakeLights } from './lightvolume';
+import { bakeLocalLights, updateHalos } from './locallights';
 import { U } from './tsl';
 import { Traffic } from './traffic';
 import { MetroTrains, addMetro } from './metro';
@@ -277,7 +278,7 @@ export interface CityRender {
   lights: CityLights;
   update(camera: THREE.Camera, dt: number): void;
   dispose(): void;
-  stats: { meshes: number; triangles: number; instances: number; buildMs: number; bakeMs: number };
+  stats: { meshes: number; triangles: number; instances: number; buildMs: number; bakeMs: number; localLights: number };
 }
 
 interface CullEntry {
@@ -298,6 +299,8 @@ export function buildCityRender(spec: CitySpec): CityRender {
   const emitters: Emitter[] = spec.emitters.slice();
   for (const h of spec.highways) highwayEmitters(h, emitters);
   const bake = bakeLights({ ...spec, emitters }, 0.6);
+  // signs, lamps, fires and festoons as local lights (and the halo candidates)
+  const local = bakeLocalLights(spec, bake.rect);
   U.cityRect.value.set(spec.bounds.x0, spec.bounds.z0, spec.bounds.x1, spec.bounds.z1);
 
   const chunks = new Chunks();
@@ -463,11 +466,13 @@ export function buildCityRender(spec: CitySpec): CityRender {
     traffic,
     flyers,
     lights,
-    stats: { meshes, triangles, instances: kits.instanceCount, buildMs: performance.now() - t0, bakeMs: bake.ms },
+    stats: { meshes, triangles, instances: kits.instanceCount, buildMs: performance.now() - t0, bakeMs: bake.ms + local.ms, localLights: local.lights },
     update(camera: THREE.Camera, dt: number): void {
       time += dt;
       camera.getWorldPosition(cam);
       U.camY.value = cam.y;
+      (U.camPos.value as THREE.Vector3).copy(cam);
+      updateHalos(camera as THREE.PerspectiveCamera);
       sky.position.copy(cam);
       sky.updateMatrixWorld();
       for (const e of culls) {

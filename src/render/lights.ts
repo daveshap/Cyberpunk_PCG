@@ -49,7 +49,7 @@ import {
 } from 'three/tsl';
 import type { CitySpec, Highway, Street } from '../core/types';
 import { hash01 } from '../core/rng';
-import { U, flicker, fogAtten } from './tsl';
+import { U, flicker, pointAtten } from './tsl';
 import { CLS, kitGeometries, makeKitMaterial } from './kits';
 
 /** Per-frame camera terms shared by every sprite material. */
@@ -165,7 +165,7 @@ function makeStaticMaterial(): THREE.MeshBasicNodeMaterial {
   const c = Fn(() => {
     const fl = flicker(vC.y, vC.x);
     const rgb = vB.rgb.mul(profile()).mul(vE).mul(fl).mul(vNear).mul(U.neon);
-    return vec4(fogAtten(rgb, positionWorld), 1.0);
+    return vec4(pointAtten(rgb, positionWorld), 1.0);
   })();
   additiveGlow(m, c);
   return m;
@@ -262,7 +262,7 @@ function makeCarLightMaterial(): THREE.MeshBasicNodeMaterial {
     })(),
     'vCarRGB',
   );
-  const c = Fn(() => vec4(fogAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
+  const c = Fn(() => vec4(pointAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
   additiveGlow(m, c);
   return m;
 }
@@ -617,7 +617,7 @@ function makeFlyLightMaterial(): THREE.MeshBasicNodeMaterial {
     })(),
     'vFlyRGB',
   );
-  const c = Fn(() => vec4(fogAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
+  const c = Fn(() => vec4(pointAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
   additiveGlow(m, c);
   return m;
 }
