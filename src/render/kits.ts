@@ -174,7 +174,7 @@ function buildGeometries(): Record<KitGeom, THREE.BufferGeometry> {
   {
     const b = mb();
     part(b, PART.emit);
-    addSphere(b, 0, 0.5, 0, 0.5, 0.5, 0.5, 6, 4);
+    addSphere(b, 0, 0.5, 0, 0.5, 0.5, 0.5, 10, 6);
     out.beacon = b.build();
   }
   // cage: open grille box (window cage)
