@@ -65,7 +65,16 @@ export type LandUse = 'residential' | 'commercial' | 'nightlife' | 'industrial' 
 
 export const LAND_USES: readonly LandUse[] = ['residential', 'commercial', 'nightlife', 'industrial', 'civic', 'green'];
 
+/**
+ * What kind of city: a coastal city of a few million, or the hive, a city-planet whose
+ * towers are kilometres tall, packed shoulder to shoulder over canyons with no ground
+ * in sight and no edge.
+ */
+export type World = 'city' | 'hive';
+
 export interface Dials {
+  /** The coastal city or the hive (kilometre-scale towers, no coast, no edge). */
+  world: World;
   /** Entropism: dirt, decay, clutter, dead lights. -1..1 */
   grime: number;
   /** Neomilitarism: monolithic, angular, matte, cold light. -1..1 */
@@ -250,7 +259,22 @@ export type Archetype =
   | 'disc'
   | 'flare'
   | 'arch'
-  | 'stilts';
+  | 'stilts'
+  // shaped towers (core/forms.ts): lathed, faceted, twisted, leaning, accreted
+  | 'egg'
+  | 'prism'
+  | 'helix'
+  | 'lean'
+  | 'stack'
+  | 'bundle'
+  | 'skyship'
+  | 'hulk';
+
+/**
+ * Structure drawn over a facade: a diagrid of diagonal members, vertical ribs,
+ * horizontal spandrel bands, or a megaframe of giant cross braces.
+ */
+export type Skin = 'diagrid' | 'ribs' | 'bands' | 'frame';
 
 /** Facade material families; the renderer maps each to a shader branch. */
 export type FacadeStyle = 'glass' | 'panel' | 'grid' | 'shop' | 'balcony' | 'metal' | 'raw' | 'lux';
@@ -301,6 +325,15 @@ export interface Tier {
   top?: Vec2[];
   /** Draw the underside: the tier overhangs what is below it (cantilevers, discs, stilts). */
   under?: boolean;
+  /**
+   * The tier carries on into the one above as one surface (a lathed or twisted shell):
+   * no roof, parapet or crown light at its top.
+   */
+  seam?: boolean;
+  /** The walls are facets of one curved surface: shaded smooth, windows run on round it. */
+  smooth?: boolean;
+  /** Structure drawn over the facade. */
+  skin?: Skin;
 }
 
 export interface Building {
@@ -401,7 +434,12 @@ export type KitKind =
   | 'barrel'
   | 'planter'
   | 'pylon'
-  | 'beacon';
+  | 'beacon'
+  // bolted-on detail (core/greebles.ts)
+  | 'module'
+  | 'pod'
+  | 'truss'
+  | 'shaft';
 
 export interface KitInstance {
   kind: KitKind;
