@@ -3,7 +3,10 @@
  * Post pipeline:
  *   scene pass (MRT: output, glow, velocity)
  *   -> volumetric haze: a jittered raymarch through height fog, 3D noise and
- *      the city light volume, at reduced resolution with a depth-aware upsample
+ *      the city light volume, at reduced resolution with a depth-aware upsample;
+ *      plus the analytic in-scatter halos of the nearest bright local lights
+ *      (closed-form single scattering per light, clipped by depth and the
+ *      light's wall; see locallights.ts)
  *   -> + glow layer (neon, halos, steam, rain; already fogged per pixel)
  *   -> TRAA (temporal AA, also resolves the fog jitter)
  *   -> bloom -> grade -> chromatic aberration -> vignette -> film grain -> tone map.
@@ -49,12 +52,18 @@ import {
   fract,
   pow,
   time,
+  atan,
+  clamp,
+  inverseSqrt,
 } from 'three/tsl';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { film } from 'three/addons/tsl/display/FilmNode.js';
 import { edgeChromaticAberration } from './chromatic';
-import { U, lightAt, rainRipples, reflectedLight, skyColor, waterNormal, zoneAt } from './tsl';
+import { U, flicker, hazeLight, lightAt, rainRipples, reflectedLight, skyColor, waterNormal, zoneAt } from './tsl';
+import { HALO, HALO_N, LLU } from './locallights';
+import { SKYMAP, skyVisibility } from './skymap';
 
 /**
  * Tileable 3D value noise (two octaves), stored as a 2D atlas of 64 slices
@@ -131,6 +140,9 @@ function makeNoiseAtlas(): THREE.DataTexture {
 }
 
 /** Repeating 3D noise lookup in the atlas (p in noise periods). */
+/** One noise atlas for every post chain (quality changes rebuild the chain). */
+let noiseAtlas: THREE.DataTexture | null = null;
+
 function noiseSampler(tex: THREE.DataTexture) {
   const node = texture(tex);
   return Fn(([p]) => {
@@ -158,6 +170,8 @@ export interface PostOptions {
   bloom: boolean;
   /** Screen-space reflections on wet ground and water (null = off). */
   ssr: { steps: number; scale: number } | null;
+  /** Ground-truth ambient occlusion (null = off): resolution scale and samples per pixel. */
+  ao: { scale: number; samples: number } | null;
 }
 
 export interface PostHandle {
@@ -165,6 +179,26 @@ export interface PostHandle {
   render: () => void;
   u: Record<string, { value: unknown }>;
   frame: () => void;
+  /**
+   * Free the chain's passes, render targets and materials. Quality changes build a new
+   * chain; without this every change kept the old one's render targets (the scene's
+   * colour, glow, velocity and depth, TRAA history, bloom, AO, haze and SSR) alive.
+   */
+  dispose: () => void;
+}
+
+/** Dispose post nodes and the textures convertToTexture() made for their inputs. */
+function disposeNodes(nodes: Array<{ dispose?: () => void } | null | undefined>): void {
+  const seen = new Set<object>();
+  const free = (n: { dispose?: () => void; isRTTNode?: boolean } | null | undefined): void => {
+    if (!n || seen.has(n) || typeof n.dispose !== 'function') return;
+    seen.add(n);
+    // inputs wrapped by convertToTexture() (TRAA's beauty, bloom's and the aberration's input)
+    const m = n as { beautyNode?: { isRTTNode?: boolean }; inputNode?: { isRTTNode?: boolean }; textureNode?: { isRTTNode?: boolean } };
+    for (const c of [m.beautyNode, m.inputNode, m.textureNode]) if (c && c.isRTTNode) free(c as never);
+    n.dispose();
+  };
+  for (const n of nodes) free(n as never);
 }
 
 export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, opts: PostOptions): PostHandle {
@@ -186,14 +220,19 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
   // ambient terms below, so they must stay under the brightness of the dark walls and
   // the night sky, or distance piles up into a glowing wall (the "N64 horizon"). The
   // district tint and horizon glow are kept as faint ambients so the murk keeps its hue.
-  const scatter = uniform(0.11);
-  const fogAmb = uniform(0.016);
+  const scatter = uniform(0.06);
+  const fogAmb = uniform(0.01);
   /** How much of the horizon sky colour the haze takes on (light pollution). */
-  const skyAmb = uniform(0.02);
+  const skyAmb = uniform(0.012);
   const noiseAmt = uniform(0.75);
+  /** Halo strength: how much the air glows round signs and lamps (humid city air). */
+  const haloGain = uniform(16);
+  /** Forward scattering of the halos (0 even, toward 1 a light you look toward glows more). */
+  const haloG = uniform(0.5);
   const fogOn = uniform(1);
   const res = uniform(new THREE.Vector2(1920, 1080));
-  const noise3 = noiseSampler(makeNoiseAtlas());
+  noiseAtlas ??= makeNoiseAtlas();
+  const noise3 = noiseSampler(noiseAtlas);
 
   const steps = opts.fogSteps;
   const haze = Fn(() => {
@@ -210,6 +249,8 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     const T = float(1).toVar();
     const acc = vec3(0).toVar();
     const tPrev = float(0).toVar();
+    // looking toward the light from above, its shafts glow more (forward scattering)
+    const shaftPhase = mix(0.55, 1.8, smoothstep(0.1, 0.95, dot(dir, SKYMAP.dir))).toVar();
     Loop(steps, ({ i }) => {
       // toVar: TSL emits expressions where they are first used, so pin the step length
       // before tPrev is overwritten
@@ -225,10 +266,16 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       const n2 = noise3(p.mul(vec3(0.013, 0.02, 0.013)).sub(vec3(time.mul(0.009), 0, 0)));
       const nn = mix(1.0, n.mul(0.7).add(n2.mul(0.6)).add(0.1), noiseAmt);
       const dens = U.fogDensity.mul(z.a.mul(2.0)).mul(exp(h.mul(U.fogFalloff).negate())).mul(nn.mul(nn).mul(1.25));
-      const Lr = lightAt(p);
+      // (t is this sample's distance from the camera)
+      const Lr = hazeLight(p, smoothstep(LLU.near, LLU.far, t));
       // soft-saturate very bright pockets (a packed neon strip) so the haze glows, not whites out
       const Lsat = Lr.div(dot(Lr, vec3(0.3, 0.5, 0.2)).mul(0.25).add(1.0));
-      const Ls = Lsat.mul(scatter).add(tint.mul(fogAmb)).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.008));
+      // light shafts: light from above, cut by the towers and bridges over this point
+      const shaftL = vec3(0).toVar();
+      If(U.shaft.greaterThan(0.0), () => {
+        shaftL.assign(vec3(U.shaftColor).mul(skyVisibility(p)).mul(U.shaft).mul(shaftPhase));
+      });
+      const Ls = Lsat.mul(scatter).add(tint.mul(fogAmb)).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.008)).add(shaftL);
       const a = exp(dens.mul(dt).negate());
       acc.addAssign(Ls.mul(T).mul(a.oneMinus()));
       T.mulAssign(a);
@@ -247,10 +294,69 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     const aTail = exp(tauTail.negate().max(-40.0));
     acc.addAssign(tintEnd.mul(fogAmb).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.008)).mul(T).mul(aTail.oneMinus()));
     T.mulAssign(aTail);
+
+    // ---- halos: the glow of the brightest lights near the view in the air round them.
+    // Single scattering from each light integrates in closed form along the ray (Sun et
+    // al. 2005): with h the light's distance from the ray and s the distance along it
+    // from the closest point, the integral of (1 + g cos)/(h^2 + s^2) is
+    // atan(s/h)/h + g/sqrt(h^2 + s^2) (g > 0 scatters forward, so a light you look
+    // toward glows more). The kernel used is the difference of two of those, one
+    // softened by the light's size a and one by its halo radius R: it falls off as
+    // 1/r^2 in between and much faster past R, so a halo stays round its light instead
+    // of tinting the whole street. The ray ends at the surface it hits, and a sign only
+    // lights the street side of its wall, so walls cut halos where they should.
+    const tVis = min(rlen, float(20000.0));
+    const glowAir = vec3(0).toVar();
+    Loop(HALO_N, ({ i }) => {
+      If(float(i).greaterThanEqual(HALO.count), () => {
+        Break();
+      });
+      const A = HALO.a.element(i);
+      const C = HALO.c.element(i);
+      const oc = A.xyz.sub(camPos);
+      const t0 = dot(oc, dir);
+      const hh = dot(oc, oc).sub(t0.mul(t0)).max(0.0);
+      // the visible part of the ray: up to the surface it hits, on the light's side of its wall
+      const s0 = camPos.x.mul(C.x).add(camPos.z.mul(C.y)).sub(C.z);
+      const ds = dir.x.mul(C.x).add(dir.z.mul(C.y));
+      const tc = s0.negate().div(select(abs(ds).lessThan(1e-5), float(1e-5), ds));
+      const front = s0.greaterThanEqual(0.0);
+      const ta = select(front, float(0.0), select(ds.greaterThan(0.0), tc.max(0.0), tVis));
+      const tb = select(front.and(ds.lessThan(0.0)), tc.min(tVis), tVis);
+      // the closest that part comes to the light: past four halo radii the glow is under
+      // a percent of its peak, so the work is skipped there (and faded out from three
+      // radii, so the cut never shows). Most rays pass near only a few of the lights.
+      const tm = clamp(t0, ta, tb);
+      const dm2 = hh.add(t0.sub(tm).mul(t0.sub(tm)));
+      const R2 = C.w.mul(C.w);
+      If(dm2.lessThan(R2.mul(16.0)).and(tb.greaterThan(ta)), () => {
+        const B = HALO.b.element(i);
+        const h2 = hh.add(A.w.mul(A.w));
+        const hi = inverseSqrt(h2);
+        const H2 = hh.add(R2);
+        const Hi = inverseSqrt(H2);
+        const sa = ta.sub(t0);
+        const sb = tb.sub(t0);
+        const F = (s, q2, qi) => atan(s.mul(qi)).mul(qi).add(haloG.mul(inverseSqrt(q2.add(s.mul(s)))));
+        const Fa = F(sa, h2, hi).sub(F(sa, H2, Hi));
+        const Fb = F(sb, h2, hi).sub(F(sb, H2, Hi));
+        const edge = oneMinus(smoothstep(R2.mul(9.0), R2.mul(16.0), dm2));
+        // dimmed by the haze between the camera and the light
+        const pm = camPos.add(dir.mul(tm));
+        const Tm = exp(U.fogDensity.mul(2.4).mul(exp(max(pm.y.add(camPos.y).mul(0.5), 0.0).mul(U.fogFalloff).negate())).mul(tm).negate());
+        const fl = float(1.0).toVar();
+        If(B.w.greaterThanEqual(1.0), () => {
+          fl.assign(flicker(fract(B.w), floor(B.w)));
+        });
+        glowAir.addAssign(B.rgb.mul(Fb.sub(Fa).max(0.0).mul(Tm).mul(fl).mul(edge)));
+      });
+    });
+    acc.addAssign(glowAir.mul(U.fogDensity).mul(haloGain).mul(U.rain.mul(0.6).add(0.7)).mul(1.0 / (4.0 * Math.PI)));
     const dbgMode = new URLSearchParams(location.search).get('hdbg');
     if (dbgMode === 'tmax') return vec4(vec3(tMax.div(3000.0)), 0.0);
     if (dbgMode === 'zone') return vec4(zoneAt(camPos.add(dir.mul(200.0))).rgb, 0.0);
     if (dbgMode === 'light') return vec4(lightAt(camPos.add(dir.mul(tMax.mul(0.5)))).mul(0.25), 0.0);
+    if (dbgMode === 'sky') return vec4(vec3(skyVisibility(camPos.add(dir.mul(min(tMax.mul(0.5), float(150.0)))))), 0.0);
     return vec4(acc, T);
   });
 
@@ -288,6 +394,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
   // to the sky and the light volume. A per-pixel jitter of the normal, resolved by
   // TRAA, stretches the reflections into streaks the way wet asphalt does.
   let reflected = vec3(0);
+  let ssrRtt: { dispose?: () => void } | null = null;
   U.ssrOn.value = opts.ssr ? 1 : 0;
   if (opts.ssr) {
     const camView = uniform(camera.matrixWorldInverse);
@@ -372,6 +479,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       return out;
     });
     const ssrTex = rtt(ssrPass(), null, null, { type: THREE.HalfFloatType, resolutionScale: opts.ssr.scale });
+    ssrRtt = ssrTex;
     const ssrScale = opts.ssr.scale;
     // depth-aware upsample that only trusts taps where reflections were computed
     const ssrUp = Fn(() => {
@@ -397,7 +505,31 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     });
     reflected = (ssrScale >= 0.99 ? ssrTex.sample(screenUV).rgb : ssrUp()).mul(oneMinus(color.a).max(0.0));
   }
-  const composed = vec4(color.rgb.add(reflected).mul(fogT).add(fogC).add(glow.rgb), 1.0);
+  // ---------------------------------------------------------------- ambient occlusion
+  // Ground-truth AO (Jimenez et al. 2016) from the depth buffer: creases, setbacks, the
+  // foot of every wall and everything bolted onto one darken, so stacked and cluttered
+  // forms read as solid instead of flat. It darkens the light that falls on surfaces,
+  // not what glows: bright pixels (windows, signs, screens) are mostly emissive and keep
+  // their light. TRAA resolves the AO's per-frame rotation into a smooth result.
+  const aoStrength = uniform(opts.ao ? 0.85 : 0);
+  let lit = color.rgb;
+  let aoNode: ReturnType<typeof gtao> | null = null;
+  if (opts.ao) {
+    aoNode = gtao(depth, null, camera);
+    aoNode.resolutionScale = opts.ao.scale;
+    aoNode.samples.value = opts.ao.samples;
+    aoNode.radius.value = 3.0;
+    aoNode.thickness.value = 2.5;
+    aoNode.scale.value = 1.15;
+    aoNode.useTemporalFiltering = opts.traa;
+    const aoTex = aoNode.getTextureNode();
+    const aoV = aoTex.sample(screenUV).r;
+    const sky = step(0.9999, depth.sample(screenUV).r);
+    const glowing = smoothstep(0.35, 1.6, luminance(color.rgb));
+    const k = mix(float(1.0), aoV, aoStrength.mul(oneMinus(glowing)).mul(oneMinus(sky)));
+    lit = color.rgb.mul(k);
+  }
+  const composed = vec4(lit.add(reflected).mul(fogT).add(fogC).add(glow.rgb), 1.0);
 
   const dbg = new URLSearchParams(location.search).get('debug');
   if (dbg === 'fog') {
@@ -407,18 +539,28 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       (U.res.value as THREE.Vector2).copy(res.value);
       camera.updateMatrixWorld();
       camPos.value.setFromMatrixPosition(camera.matrixWorld);
-    }, u: {} };
+    }, u: {}, dispose: () => {
+      disposeNodes([hazeTex, ssrRtt, aoNode, scenePass]);
+      pipeline.dispose();
+    } };
   }
   if (dbg === 'depth') {
     // raw view distance / 3000 m, no tone mapping (for depth-binned measurements)
     const vpD = getViewPosition(screenUV, depth.sample(screenUV).r, camProjInv);
     pipeline.outputNode = vec4(vec3(length(vpD).div(3000.0)), 1.0);
     pipeline.outputColorTransform = false;
-    return { pipeline, render: () => pipeline.render(), frame: () => camera.updateMatrixWorld(), u: {} };
+    return { pipeline, render: () => pipeline.render(), frame: () => camera.updateMatrixWorld(), u: {}, dispose: () => {
+      disposeNodes([hazeTex, ssrRtt, aoNode, scenePass]);
+      pipeline.dispose();
+    } };
   }
   const aa = opts.traa ? traa(composed, depth, vel, camera) : composed;
 
-  const bloomNode = bloom(aa, 0.72, 0.42, 0.82);
+  // bright signs glow round themselves (comps: night photos, where a lit sign carries a
+  // soft halo of glare); a soft knee lets lightboxes and tubes just over the threshold
+  // join in gradually instead of popping
+  const bloomNode = bloom(aa, 0.75, 0.45, 0.82);
+  bloomNode.smoothWidth.value = 0.12;
   const bloomOn = uniform(opts.bloom ? 1 : 0);
   const tint = uniform(new THREE.Vector3(1.0, 0.97, 1.03));
   // blacks stay black (comps: Akira's inky night, film-like density); a hair of cool lift only
@@ -452,7 +594,11 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       frameN = (frameN + 1) % 1024;
       frameJ.value = frameN;
     },
-    u: { res, maxDist, scatter, fogAmb, skyAmb, noiseAmt, fogOn, bloomOn, bloomStrength: bloomNode.strength, bloomRadius: bloomNode.radius, bloomThreshold: bloomNode.threshold, tint, lift, sat, contrast, chroma, vigInt, grain },
+    dispose: () => {
+      disposeNodes([ca, bloomNode, opts.traa ? aa : null, hazeTex, ssrRtt, aoNode, scenePass]);
+      pipeline.dispose();
+    },
+    u: { res, maxDist, scatter, fogAmb, skyAmb, noiseAmt, fogOn, haloGain, haloG, aoStrength, ...(aoNode ? { aoRadius: aoNode.radius, aoThickness: aoNode.thickness, aoScale: aoNode.scale } : {}), bloomOn, bloomStrength: bloomNode.strength, bloomRadius: bloomNode.radius, bloomThreshold: bloomNode.threshold, bloomKnee: bloomNode.smoothWidth, tint, lift, sat, contrast, chroma, vigInt, grain },
   };
 }
 

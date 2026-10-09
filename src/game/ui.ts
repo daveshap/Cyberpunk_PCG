@@ -41,6 +41,7 @@ const CSS = `
 .ns-row{display:flex;gap:6px;flex-wrap:wrap}
 .ns-btn{pointer-events:auto;font:600 10px var(--display);letter-spacing:.16em;text-transform:uppercase;color:var(--ink);background:rgba(72,230,255,.08);border:1px solid var(--line);border-radius:3px;padding:6px 8px;cursor:pointer}
 .ns-btn:hover,.ns-btn:focus-visible{border-color:var(--cyan);color:var(--cyan);outline:none}
+.ns-btn.on{border-color:var(--pink);color:#fff;background:rgba(255,61,139,.16)}
 .ns-btn.hot{border-color:var(--pink);color:var(--pink);box-shadow:0 0 12px rgba(255,94,162,.3)}
 .ns-seed{display:flex;gap:6px}
 .ns-seed input{flex:1;min-width:0;font:12px var(--mono);color:var(--ink);background:rgba(0,0,0,.4);border:1px solid var(--line);border-radius:3px;padding:5px 6px}
@@ -108,7 +109,8 @@ export const LIVE_DIALS: DialDef[] = [
 ];
 
 export const PRESETS: { name: string; dials: DialsInput }[] = [
-  { name: 'Default', dials: { grime: 0, edge: 0, flash: 0, luxury: 0, east: 0, jpcn: 0, density: 1, height: 1, alien: 0.5 } },
+  { name: 'Default', dials: { world: 'city', grime: 0, edge: 0, flash: 0, luxury: 0, east: 0, jpcn: 0, density: 1, height: 1, alien: 0.5 } },
+  { name: 'Hive', dials: { world: 'hive', grime: 0.35, edge: 0.25, flash: 0.35, luxury: -0.2, east: 0.3, jpcn: 0.2, density: 1.1, height: 1, alien: 0.7 } },
   {
     name: 'Boom town',
     dials: {
@@ -280,6 +282,30 @@ export class Ui {
     this.deck.append(head, body);
     // phones start with the deck folded so it does not cover the HUD
     if (typeof matchMedia === 'function' && matchMedia('(max-width: 760px)').matches) this.deck.classList.add('closed');
+    // world: the coastal city or the hive (a city-planet of kilometre towers)
+    const ws = el('div', 'ns-sec');
+    ws.append(el('h4', '', 'World'));
+    const wrow = el('div', 'ns-row');
+    for (const [w, label] of [
+      ['city', 'Coast city'],
+      ['hive', 'Hive'],
+    ] as const) {
+      const b = el('button', 'ns-btn', label) as HTMLButtonElement;
+      b.type = 'button';
+      b.dataset.world = w;
+      b.style.flex = '1';
+      b.addEventListener('click', () => {
+        if (this.dials.world === w) return;
+        this.dials.world = w;
+        this.syncWorld();
+        this.scheduleRegen(true);
+      });
+      this.worldBtns.push(b);
+      wrow.append(b);
+    }
+    ws.append(wrow);
+    body.append(ws);
+    this.syncWorld();
     body.append(this.section('Style', STYLE_DIALS, true));
     body.append(this.section('Culture', CULTURE_DIALS, true));
     body.append(this.section('City', CITY_DIALS, true));
@@ -389,7 +415,7 @@ export class Ui {
     this.start = el(
       'div',
       'ns-start',
-      `<div class="ns-card"><h1>NEON SPRAWL</h1><p>a procedural city of seven districts, by air</p><div class="go">CLICK TO FLY</div><div class="go" data-k="ap">GUIDED FLIGHT</div>` +
+      `<div class="ns-card"><h1>NEON SPRAWL</h1><p>${this.dials.world === 'hive' ? 'a city-planet of kilometre towers, by air' : 'a procedural city of seven districts, by air'}</p><div class="go">CLICK TO FLY</div><div class="go" data-k="ap">GUIDED FLIGHT</div>` +
         `<div class="keys"><i>Mouse</i><span>steer</span><i>W/S</i><span>thrust</span><i>A/D</i><span>strafe</span><i>Shift</i><span>boost</span><i>Space/C</i><span>up/down</span><i>F</i><span>autopilot</span></div>` +
         `<div class="ns-touch">left thumb flies · right thumb steers</div></div>`,
     );
@@ -448,7 +474,14 @@ export class Ui {
     return row;
   }
 
+  private readonly worldBtns: HTMLButtonElement[] = [];
+
+  private syncWorld(): void {
+    for (const b of this.worldBtns) b.classList.toggle('on', b.dataset.world === this.dials.world);
+  }
+
   private syncInputs(): void {
+    this.syncWorld();
     for (const [k, inp] of this.inputs) {
       let v: number | undefined;
       if (k.startsWith('mix.')) v = this.dials.mix[k.slice(4) as DistrictKind];

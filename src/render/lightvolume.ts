@@ -2,16 +2,21 @@
  * Bakes the city's emitters into the light textures on the CPU:
  *  - a 3D light volume (256 x 32 x 256, logarithmic in height) that lights
  *    facades at any altitude and colours the volumetric haze,
- *  - a 2D ground map (1024 x 1024) for crisp pools of light on the streets,
+ *  - a 2D ground map (1024 x 1024) for crisp pools of light on the streets, and a
+ *    second one without the sources drawn as local lights (signs, lamps, fires,
+ *    festoons), which the shaders use near the camera (locallights.ts),
  *  - a small zone map with each district's fog tint and density.
  * The textures are allocated once (tsl.ts) and rewritten in place.
  */
 import * as THREE from 'three/webgpu';
 import type { CitySpec, District, Superblock } from '../core/types';
 import { LV, TEX, U, VA, VOL_MAX } from './tsl';
+import { LOCAL_SRC } from './locallights';
 
 const H0 = 10;
-const HMAX = 420;
+/** Top of the light volume: the city's towers, or the hive's kilometre ones. */
+const HMAX_CITY = 420;
+const HMAX_HIVE = 3200;
 
 // fast float32 -> float16 (round to nearest, no NaN handling needed for light values)
 const f32 = new Float32Array(1);
@@ -41,6 +46,7 @@ export function bakeLights(spec: CitySpec, gain = 1): BakeResult {
   const W = spec.bounds.x1 - spec.bounds.x0 + margin * 2;
   const D = spec.bounds.z1 - spec.bounds.z0 + margin * 2;
   U.volRect.value.set(x0, z0, 1 / W, 1 / D);
+  const HMAX = spec.dials.world === 'hive' ? HMAX_HIVE : HMAX_CITY;
   const logDen = Math.log(1 + HMAX / H0);
   U.volY.value.set(H0, 1 / logDen);
 
@@ -58,6 +64,7 @@ export function bakeLights(spec: CitySpec, gain = 1): BakeResult {
   const gw = W / G;
   const gd = D / G;
   const gacc = new Float32Array(G * G * 3);
+  const gaccN = new Float32Array(G * G * 3);
 
   for (const e of spec.emitters) {
     const r = e.radius;
@@ -91,6 +98,7 @@ export function bakeLights(spec: CitySpec, gain = 1): BakeResult {
     }
     // ---- ground map (street level emitters only)
     if (e.y < 16) {
+      const local = e.src !== undefined && LOCAL_SRC.has(e.src);
       const gr = r * 0.9;
       const gr2 = gr * gr;
       const k = Math.exp(-e.y * 0.08);
@@ -110,6 +118,11 @@ export function bakeLights(spec: CitySpec, gain = 1): BakeResult {
           gacc[idx] = (gacc[idx] as number) + e.r * w;
           gacc[idx + 1] = (gacc[idx + 1] as number) + e.g * w;
           gacc[idx + 2] = (gacc[idx + 2] as number) + e.b * w;
+          if (!local) {
+            gaccN[idx] = (gaccN[idx] as number) + e.r * w;
+            gaccN[idx + 1] = (gaccN[idx + 1] as number) + e.g * w;
+            gaccN[idx + 2] = (gaccN[idx + 2] as number) + e.b * w;
+          }
         }
       }
     }
@@ -187,6 +200,14 @@ export function bakeLights(spec: CitySpec, gain = 1): BakeResult {
     gdata[n * 4 + 3] = 0x3c00;
   }
   TEX.ground.needsUpdate = true;
+  const gnear = TEX.groundNear.image.data as Uint16Array;
+  for (let n = 0, m = 0; n < G * G; n++, m += 3) {
+    gnear[n * 4] = toHalf(soft(gaccN[m] as number));
+    gnear[n * 4 + 1] = toHalf(soft(gaccN[m + 1] as number));
+    gnear[n * 4 + 2] = toHalf(soft(gaccN[m + 2] as number));
+    gnear[n * 4 + 3] = 0x3c00;
+  }
+  TEX.groundNear.needsUpdate = true;
 
   // ---- zone map: fog tint and density per district, box-blurred across borders
   const Z = LV.Z;
@@ -206,8 +227,10 @@ export function bakeLights(spec: CitySpec, gain = 1): BakeResult {
       const x = x0 + ((i + 0.5) / Z) * W;
       const zz = z0 + ((j + 0.5) / Z) * D;
       const s = sbAt(x, zz);
+      // outside the districts (the sea, the sprawl) the air is cleaner than in the streets:
+      // the skyline across the water stays clear while the districts' own haze closes in
       let tint: [number, number, number] = [0.05, 0.06, 0.09];
-      let dens = 0.9;
+      let dens = 0.5;
       if (s && s.district >= 0) {
         const d = spec.districts[s.district] as District;
         tint = d.fog.tint;

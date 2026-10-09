@@ -12,15 +12,16 @@ import { makeStreets } from './streets';
 import { makeLots } from './lots';
 import { makeBuildings } from './massing';
 import { dress } from './dressing';
-import { makeLanes } from './traffic';
+import { HIVE_BANDS, makeLanes } from './traffic';
 import { FlightWorld, buildBoxes } from './collision';
 import { makeOutskirts } from './outskirts';
 import { assignUses } from './landuse';
 import { makeTransit, transitBoxes, transitDressing } from './transit';
-import { makeSkybridges } from './skybridges';
+import { makeHiveBridges, makeSkybridges } from './skybridges';
 import { makeSpectacle } from './spectacle';
 import { makeFlyers } from './flyers';
 import { assignMedia } from './media';
+import { boltOn } from './greebles';
 
 export function generateCity(options: CityOptions = {}, now: () => number = () => 0): CitySpec {
   const t0 = now();
@@ -41,17 +42,19 @@ export function generateCity(options: CityOptions = {}, now: () => number = () =
   mark('streets');
   assignUses(zoning, blocks, streets, root.fork('uses'), dials);
   mark('uses');
-  const lots = makeLots(blocks, zoning.districts, root.fork('lots'), dials.density, dials.alien);
+  const lots = makeLots(blocks, zoning.districts, root.fork('lots'), dials.density, dials.alien, zoning.hive);
   mark('lots');
   const structures: CitySpec['structures'] = [];
   const buildings = makeBuildings(zoning, lots, root.fork('massing'), dials.height, structures, dials.alien);
   mark('massing');
-  structures.push(...makeSkybridges(buildings, streets, roads, root.fork('bridges'), dials.alien));
+  structures.push(...(zoning.hive ? makeHiveBridges(buildings, root.fork('bridges'), [...HIVE_BANDS, 97, 157, 310, 530]) : makeSkybridges(buildings, streets, roads, root.fork('bridges'), dials.alien)));
   mark('skybridges');
   assignMedia(buildings, zoning.districts, zoning.coastZ);
   mark('media');
   const dressed = dress(zoning, buildings, lots, blocks, streets, roads, root.fork('dressing'), structures);
   mark('dressing');
+  dressed.kits.push(...boltOn(buildings, lots, zoning.districts, root.fork('greebles')));
+  mark('greebles');
   const spectacle = makeSpectacle(zoning, buildings, lots, root.fork('spectacle'));
   dressed.emitters.push(...spectacle.emitters);
   mark('spectacle');
@@ -64,7 +67,7 @@ export function generateCity(options: CityOptions = {}, now: () => number = () =
   const flyers = makeFlyers(zoning, buildings, streets, root.fork('flyers'));
   dressed.emitters.push(...flyers.emitters);
   mark('traffic');
-  const outskirts = makeOutskirts(root.fork('outskirts'), zoning.bounds, zoning.coastZ(zoning.bounds.x0 + 1), zoning.coastZ(zoning.bounds.x1 - 1), dials);
+  const outskirts = makeOutskirts(root.fork('outskirts'), zoning.bounds, zoning.coastZ(zoning.bounds.x0 + 1), zoning.coastZ(zoning.bounds.x1 - 1), dials, zoning.hive ? 2600 : 2100);
   mark('outskirts');
   const boxes = buildBoxes(buildings, highways, structures);
   for (const o of outskirts.buildings) boxes.push({ x0: o.rect.x0, z0: o.rect.z0, x1: o.rect.x1, z1: o.rect.z1, y0: 0, y1: o.h });
@@ -80,7 +83,8 @@ export function generateCity(options: CityOptions = {}, now: () => number = () =
     const half = zoning.size / 2;
     const fromWest = core.x > zoning.bounds.x0 + 700;
     const x = Math.max(-half + 60, Math.min(half - 60, core.x + (fromWest ? -520 : 520)));
-    spawn = { x, y: 62, z: line?.pos ?? core.z, yaw: fromWest ? -Math.PI / 2 : Math.PI / 2 };
+    // (in the hive: halfway up a canyon, with towers above and below)
+    spawn = { x, y: zoning.hive ? 236 : 62, z: line?.pos ?? core.z, yaw: fromWest ? -Math.PI / 2 : Math.PI / 2 };
     const world = new FlightWorld(boxes);
     const p = { x: spawn.x, y: spawn.y, z: spawn.z };
     let guard = 0;

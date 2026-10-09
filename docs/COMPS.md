@@ -96,7 +96,66 @@ node scripts/shot.mjs --views landmark,d:luxury,spawn --extra "q=high" --out sho
   laps, kit edges and tops), scaled by grime (see the Materials section of `docs/ART_BIBLE.md`). Relief is
   shaded with analytic noise derivatives (no screen-space derivative blockiness).
 - **Still missing.** Geometry: everything is still a box at heart (no pipes, ledges or downpipes on the
-  walls, low-poly trees). Real sign light on the walls behind signs (the light volume is coarse).
+  walls, low-poly trees). Sign light on the walls round signs came in the next pass (below).
+
+### Light and air (the volumetrics pass)
+
+- **What you see.** In night street photos and in Night City, a sign lights the wall round it and the pavement
+  under it in its own colour, and the humid air glows round every bright light. Walls between lights stay dark.
+  The far end of a street dissolves in haze, and towers a kilometre off are soft, dim shapes, not crisp
+  cut-outs. The "Half-Life 2 look" (every surface lit evenly from nowhere, far things as bright as near ones) is
+  the absence of all three.
+- **How.** Games light signs as area lights: Cyberpunk 2077 shades them as analytic capsule lights (Sikachev et
+  al. 2021). Many lights per pixel come from clustered shading, a grid that lists the lights reaching each cell
+  (Olsson et al. 2012). The glow in the air comes from volumetric fog where each light scatters into a froxel
+  grid (Hillaire 2015; Unreal's volumetric fog has a per-light "volumetric scattering intensity", which artists
+  turn up for neon). For a few dozen lights, single scattering from a point light has a closed form along a view
+  ray (Sun et al. 2005). The windowed inverse-square falloff and the "representative point" on an area light are
+  from Karis 2013, and wide, soft bloom from Jimenez 2014.
+- **Now.** About 35,000 local lights (every sign as an area light, plus lamps, fires and festoon strings) light
+  the surfaces round them from a world grid baked with the city (`render/locallights.ts`). Each frame the 40
+  lights that matter most to the view (16 at medium quality, none at low) glow in the haze, integrated in closed
+  form up to the surface each ray hits and cut by the light's own wall. Ad walls glow round the whole panel, and
+  the bloom has a soft knee. The haze is thicker and taller (extinction 0.0016 per metre at street level, scale
+  height about 220 m) with a darker ambient, so distance darkens. Near the camera the coarse light volume is only a
+  low bounce under the local lights.
+- **Still missing.** Shadows from local lights (a sign lights the underside of the balcony above it as if the slab
+  were not there), light shafts (the halos have no volumetric shadows), and highlights of off-screen signs on wet
+  ground (screen-space reflections cover the signs in view).
+
+### Shapes that are not boxes (the forms pass)
+
+- **What you see.** Real skylines of the last twenty years are full of non-box towers: lathed shells under a
+  diagrid, tapers whose corners fold into triangles, twisting towers, leaning and bowed slabs, decks carried
+  across several towers. Cyberpunk cities go further: lumpy accreted blocks, whole rooms and pods bolted to the
+  walls, pipes and cables everywhere, vehicles patched together.
+- **How.** Complex tall buildings fall into a few families by the operations that make them (Vollers):
+  extruders, anglers and sliders (leaning or bending axes), twisters (rotation per floor, often with a taper),
+  rotors (a profile turned about an axis), and carvers (volumes added or cut away). Model makers' "greebles"
+  (small repeated detail glued onto a plain form) are what make a big thing read as big. Night City's design
+  splits styles by who builds: smooth monoliths for the corporations, patched and accreted forms for everyone
+  else.
+- **Now.** Eight shaped towers in `core/forms.ts` (egg, prism, helix, lean, stack, bundle, skyship, hulk), all
+  original designs; shells shaded smooth with windows and structure running round them; a diagrid, ribs,
+  spandrel bands or a megaframe over the glass; uneven setbacks on ordinary towers; and bolted-on detail on
+  walls, roofs and cars (`core/greebles.ts`).
+- **Still missing.** Non-convex footprints (an L or a U is two tiers today), curved bridges and ramps, cables
+  slung between towers at height.
+
+### Kilometre scale and the city-planet (the hive pass)
+
+- **What you see.** Concept art of city-planets and megastructures (the endless levels of a world-city, the
+  vast empty architecture of Blame!) sells scale with a few devices: a low point of view looking up or a high one
+  looking down, repetition (the same element over and over, so the eye can count), small things at true size
+  next to big ones, haze that lifts the shadows as they recede, desaturated distance, and emptiness, with the
+  focal light in a small part of the frame.
+- **Now.** The hive (`world: 'hive'`): towers of a few hundred metres to three kilometres on every block,
+  storey-high windows, canyons crossed by bridges at every height between twelve levels of traffic, a ring of
+  megatowers instead of a horizon, a deep haze that thins over 1.7 km of height, and light coming down from the
+  upper levels as shafts through the gaps (a height map tells the haze where the air sees the sky). Ambient
+  occlusion darkens every crease and everything bolted on, in both worlds.
+- **Still missing.** Levels: walkways, plazas and streets on the decks high up the canyons; a cloud deck with
+  the tower tops breaking through it; light shafts on surfaces (only the air takes them).
 
 ## Distance: why the haze piled up
 
@@ -121,6 +180,24 @@ Before, brightness rose with distance up to a sky about 14 times brighter than t
 After, the lit core is the brightest band. Beyond it the city falls off into dark air, and the sky sits close
 to the far ground.
 
+The light and air pass made the haze thicker and taller and its glow darker. Measured the same way (the
+"before" rows are the materials pass; `d:corporate` looks at a district from above and outside it):
+
+| View | 400–800 m | 800–1500 m | 1500–2500 m | 2500 m+ | sky |
+| --- | --- | --- | --- | --- | --- |
+| spawn, before | 8.7 | 2.3 | 2.0 | 1.2 | 1.8 |
+| spawn, after | 3.6 | 1.6 | 1.0 | 0.4 | 0.7 |
+| aerial, before | 0.8 | 1.9 | 3.7 | 3.1 | 3.8 |
+| aerial, after | 0.6 | 1.5 | 2.1 | 1.5 | 1.9 |
+| d:corporate, before | 9.6 | 5.0 | – | – | 3.3 |
+| d:corporate, after | 7.0 | 3.5 | – | – | 2.3 |
+
+Past 800 m these views are 20–67% darker, and the farther the band, the bigger the drop. The spawn view's
+400–800 m band holds the waterfront LED show, which changes scene over time, so that one cell also depends on
+when the frame was taken. Down in a narrow street the far bands get brighter instead (in `s:jpmarket`,
+800–1500 m went from 15.3 to 31.2): the glow round the street's own lamps and signs fills the far end of the
+street, as it does in night photos.
+
 ## Sources
 
 - [Chongqing: China's cyberpunk city](https://faroutmagazine.co.uk/chongqing-chinas-cyberpunk-city/), Far Out
@@ -137,3 +214,17 @@ to the far ground.
 - [Multilayered: Cyberpunk's supershader](https://wiki.redmodding.org/cyberpunk-2077-modding/for-mod-creators-theory/materials/multilayered), REDmodding wiki
 - [Procedural damage for game assets](https://www.strayspark.studio/blog/procedural-damage-game-assets-complete-workflow), StraySpark
 - [Bump mapping unparametrized surfaces on the GPU](https://hgpu.org/?p=3263), M. Mikkelsen
+- [A Practical Analytic Single Scattering Model for Real Time Rendering](https://www.cs.columbia.edu/~bosun/sig05.htm), Sun, Ramamoorthi, Narasimhan and Nayar (SIGGRAPH 2005)
+- [Physically Based and Unified Volumetric Rendering in Frostbite](https://www.ea.com/news/physically-based-unified-volumetric-rendering-in-frostbite), S. Hillaire (SIGGRAPH 2015)
+- [Volumetric fog in Unreal Engine](https://dev.epicgames.com/documentation/en-us/unreal-engine/volumetric-fog-in-unreal-engine), Epic Games
+- [Clustered Deferred and Forward Shading](https://www.cse.chalmers.se/~uffe/clustered_shading_preprint.pdf), Olsson, Billeter and Assarsson (HPG 2012)
+- [Real Shading in Unreal Engine 4](https://cgvr.informatik.uni-bremen.de/teaching/cg_literatur/Brian%20Karis%20-%20Real%20Shading%20in%20Unreal%20Engine%204,%202013%20Siggraph%20Course.pdf), B. Karis (SIGGRAPH 2013)
+- [Area Light Sources in Cyberpunk 2077](https://history.siggraph.org/?p=76141), Sikachev, Francesco, Nowakowski and Kowalczyk (SIGGRAPH 2021)
+- [Next Generation Post Processing in Call of Duty: Advanced Warfare](https://www.iryoku.com/next-generation-post-processing-in-call-of-duty-advanced-warfare/), J. Jimenez (SIGGRAPH 2014)
+- [Free-form high-rises (Vollers' classification of complex tall buildings)](https://www.structuremag.org/wp-content/uploads/2014/08/SF-Free-DHighRises-June081.pdf), STRUCTURE magazine
+- [Interstellar illusions: greebles lend large sci-fi structures a sense of scale](https://99percentinvisible.org/article/interstellar-illusions-greebles-lend-large-sci-fi-structures-a-sense-of-scale/), 99% Invisible
+- [Night City: how Cyberpunk 2077's megalopolis was built](https://domusweb.it/en/architecture/gallery/2020/12/21/night-city-how-the-cyberpunk-2077s-megalopolis-was-built.html), Domus
+- [How to achieve scale in your paintings](https://www.creativebloq.com/how-to/achieve-scale-in-your-paintings), Creative Bloq
+- [The infinite world of Blame!](https://www.yokogaomag.com/editorial/infinite-world-of-blame-manga), Yokogao
+- [Practical Real-Time Strategies for Accurate Indirect Occlusion](https://www.activision.com/cdn/research/Practical_Real_Time_Strategies_for_Accurate_Indirect_Occlusion_NEW%20VERSION_COLOR.pdf), Jimenez, Wu, Pesce and Jarabo (GTAO, 2016)
+- [three.js r186 release notes (volumetric fog, light probe grids)](https://cgworld.jp/flashnews/01-202610-Threejs-r186.html), CGWORLD

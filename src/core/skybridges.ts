@@ -113,3 +113,86 @@ export function makeSkybridges(buildings: readonly Building[], streets: readonly
   }
   return out;
 }
+
+/**
+ * The hive's bridges: every canyon is crossed again and again on the way up, by
+ * enclosed bridges and wide decks between the megatowers on either side, at heights
+ * kept between the traffic bands so the lanes run free under and over them.
+ */
+export function makeHiveBridges(buildings: readonly Building[], rng: Rng, bands: readonly number[]): Structure[] {
+  const out: Structure[] = [];
+  const r = rng.fork('hive-bridges');
+  const tall = buildings.filter((b) => b.height >= 160);
+  const cell = 220;
+  const grid = new Map<string, Building[]>();
+  const key = (i: number, j: number): string => i + ':' + j;
+  for (const b of tall) {
+    const k = key(Math.floor((b.rect.x0 + b.rect.x1) / 2 / cell), Math.floor((b.rect.z0 + b.rect.z1) / 2 / cell));
+    const list = grid.get(k);
+    if (list) list.push(b);
+    else grid.set(k, [b]);
+  }
+  const clearOfLanes = (y: number, h: number): boolean => bands.every((l) => y > l + 9 || y + h < l - 9);
+  const cap = 1400;
+  for (const a of tall) {
+    if (out.length >= cap) break;
+    const ai = Math.floor((a.rect.x0 + a.rect.x1) / 2 / cell);
+    const aj = Math.floor((a.rect.z0 + a.rect.z1) / 2 / cell);
+    for (let di = -1; di <= 1; di++)
+      for (let dj = -1; dj <= 1; dj++)
+        for (const b of grid.get(key(ai + di, aj + dj)) ?? []) {
+          if (b.id <= a.id || out.length >= cap) continue;
+          const top = Math.min(a.height, b.height) - 60;
+          const tries = r.intRange(2, 8);
+          for (let k = 0; k < tries; k++) {
+            const y = lerp(60, top, Math.pow(r.next(), 0.9));
+            const wide = r.chance(0.3);
+            const w = wide ? r.range(16, 34) : r.range(6, 12);
+            const h = wide ? r.range(5, 9) : r.range(5, 14);
+            if (y >= top || !clearOfLanes(y, h)) continue;
+            const ta = tierAt(a, y);
+            const tb = tierAt(b, y);
+            if (!ta || !tb || ta.y1 < y + h + 2 || tb.y1 < y + h + 2) continue;
+            const A = aabb(ta);
+            const B = aabb(tb);
+            let seg: [number, number, number, number] | null = null;
+            const oz0 = Math.max(A.z0, B.z0) + w / 2 + 2;
+            const oz1 = Math.min(A.z1, B.z1) - w / 2 - 2;
+            const ox0 = Math.max(A.x0, B.x0) + w / 2 + 2;
+            const ox1 = Math.min(A.x1, B.x1) - w / 2 - 2;
+            if (oz1 > oz0) {
+              const zz = oz0 + (oz1 - oz0) * r.next();
+              if (B.x0 - A.x1 >= 6 && B.x0 - A.x1 <= 90) seg = [A.x1, zz, B.x0, zz];
+              else if (A.x0 - B.x1 >= 6 && A.x0 - B.x1 <= 90) seg = [B.x1, zz, A.x0, zz];
+            }
+            if (!seg && ox1 > ox0) {
+              const xx = ox0 + (ox1 - ox0) * r.next();
+              if (B.z0 - A.z1 >= 6 && B.z0 - A.z1 <= 90) seg = [xx, A.z1, xx, B.z0];
+              else if (A.z0 - B.z1 >= 6 && A.z0 - B.z1 <= 90) seg = [xx, B.z1, xx, A.z0];
+            }
+            if (!seg) continue;
+            const [x0, z0, x1, z1] = seg;
+            const mx = (x0 + x1) / 2;
+            const mz = (z0 + z1) / 2;
+            // nothing else in the way at that height, and not stacked on another bridge
+            let blocked = false;
+            for (const c2 of grid.get(key(Math.floor(mx / cell), Math.floor(mz / cell))) ?? []) {
+              if (c2 === a || c2 === b) continue;
+              for (const t of c2.tiers) {
+                if (t.y0 > y + h || t.y1 < y) continue;
+                const R = aabb(t);
+                if (Math.min(x0, x1) - w / 2 < R.x1 && Math.max(x0, x1) + w / 2 > R.x0 && Math.min(z0, z1) - w / 2 < R.z1 && Math.max(z0, z1) + w / 2 > R.z0) blocked = true;
+              }
+            }
+            if (blocked) continue;
+            if (out.some((o) => Math.hypot((o.p[0]! + o.p[3]!) / 2 - mx, (o.p[2]! + o.p[5]!) / 2 - mz) < (o.p[6]! + w) / 2 + 6 && Math.abs(o.p[1]! - y) < 40)) continue;
+            out.push({ kind: 'bridge', p: [x0, y, z0, x1, y, z1, w, h], col: a.tiers[0]?.facade.base ?? [0.2, 0.2, 0.22], col2: a.palette[r.int(a.palette.length)] ?? [1, 1, 1], seed: r.next() });
+          }
+        }
+  }
+  return out;
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}

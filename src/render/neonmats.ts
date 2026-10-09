@@ -451,7 +451,7 @@ export function makeBeamMaterial(): THREE.MeshBasicNodeMaterial {
     const v = uv().y; // 0 at the source, 1 at the far end
     const along = pow(oneMinus(v), 2.2);
     const dust = mx_fractal_noise_float(wp.mul(0.12).add(vec3(0, time.mul(-0.4), 0)), 2, 2.0, 0.5).mul(0.35).add(0.75);
-    const rgb = C.mul(B.x).mul(facing).mul(along).mul(dust).mul(U.fogDensity.mul(900.0)).mul(U.neon);
+    const rgb = C.mul(B.x).mul(facing).mul(along).mul(dust).mul(U.fogDensity.mul(500.0)).mul(U.neon);
     return vec4(fogAtten(rgb, wp), 1.0);
   })();
   glowOnly(m, c);

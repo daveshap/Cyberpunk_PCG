@@ -136,7 +136,8 @@ export function addRelief(b: Building, K: KitSink, propFor: BuilderFor): void {
     const seed = f.seed;
     const shopFloors = t.grounded && t.shopH > 0 ? Math.ceil(t.shopH / fh) : 0;
     // ---- parapets
-    if (t.roof !== 'pagoda' && t.roof !== 'sawtooth') {
+    // (inside a shell there is no roof edge)
+    if (t.roof !== 'pagoda' && t.roof !== 'sawtooth' && !t.seam) {
       const ph = f.style === 'glass' ? 1.4 : f.style === 'lux' ? 1.1 : 0.95;
       const pt = 0.32;
       const cls = f.style === 'glass' ? CLS.glass : CLS.concrete;

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { FlightWorld, generateCity } from '../src/core';
-import type { CitySpec, Vec2 } from '../src/core';
+import type { Building, CitySpec, Vec2 } from '../src/core';
 import { polyArea } from '../src/core/geom2d';
 import { Flight } from '../src/game/flight';
 import { Autopilot } from '../src/game/autopilot';
@@ -144,20 +144,72 @@ describe('generator', () => {
     expect(s.superblocks.filter((sb) => sb.landmark).length).toBe(1);
     const landmark = s.buildings.find((b) => b.archetype === 'pyramid' && b.height > 300);
     expect(landmark).toBeDefined();
-    const megas = s.buildings.filter((b) => alien.has(b.archetype));
+    // megastructures and the shaped towers together make the alien massing
+    const shaped = new Set(['egg', 'prism', 'helix', 'lean', 'stack', 'bundle', 'skyship', 'hulk']);
+    const odd = (b: Building): boolean => alien.has(b.archetype) || shaped.has(b.archetype);
+    const megas = s.buildings.filter(odd);
     expect(megas.length).toBeGreaterThan(45);
-    // the archetype on a building is what was built: sloped kinds have tapered tiers, the rest overhang
+    // the archetype on a building is what was built: sloped kinds have tapered tiers, bundles
+    // stand on several feet, the rest overhang
+    const sloped = new Set(['pyramid', 'ziggurat', 'taper', 'flare', 'egg', 'prism', 'helix', 'lean']);
     for (const b of megas) {
-      if (b.archetype === 'pyramid' || b.archetype === 'ziggurat' || b.archetype === 'taper' || b.archetype === 'flare') expect(b.tiers.some((t) => t.top)).toBe(true);
+      if (sloped.has(b.archetype)) expect(b.tiers.some((t) => t.top)).toBe(true);
+      else if (b.archetype === 'bundle') expect(b.tiers.filter((t) => t.grounded).length).toBeGreaterThanOrEqual(4);
       else expect(b.tiers.some((t) => t.under)).toBe(true);
     }
     expect(s.lots.some((l) => l.mega)).toBe(true);
     const wild = city('sprawl', { alien: 0.95 });
-    expect(wild.buildings.filter((b) => alien.has(b.archetype)).length).toBeGreaterThan(megas.length * 1.3);
+    expect(wild.buildings.filter(odd).length).toBeGreaterThan(megas.length * 1.2);
     expect(s.structures.filter((x) => x.kind === 'bridge').length).toBeGreaterThan(20);
     const plain = city('sprawl', { alien: 0 });
     expect(plain.superblocks.some((sb) => sb.landmark)).toBe(false);
     expect(plain.buildings.filter((b) => alien.has(b.archetype)).length).toBe(0);
+  });
+
+  it('shapes towers: lathed and twisted shells, folds, leans, lumps and sky decks', () => {
+    const seen = new Set<string>();
+    for (const seed of ['sprawl', 'gamma', 'delta']) {
+      const s = city(seed, { alien: 0.95 });
+      for (const b of s.buildings) {
+        seen.add(b.archetype);
+        // a smooth shell is one surface: each seam tier hands its top ring to the next
+        b.tiers.forEach((t, i) => {
+          if (!t.smooth || !t.seam) return;
+          const next = b.tiers[i + 1]!;
+          expect(next.smooth).toBe(true);
+          expect(next.poly).toEqual(t.top ?? t.poly);
+        });
+        if (b.archetype === 'egg' || b.archetype === 'helix') expect(b.tiers.filter((t) => t.smooth).length).toBeGreaterThanOrEqual(8);
+        if (b.archetype === 'prism') {
+          // the fold: a ring with each base corner twice, under a top ring of half-turned corners
+          const fold = b.tiers.find((t) => t.top && t.poly.some((p, k) => p === t.poly[(k + 1) % t.poly.length]));
+          expect(fold).toBeDefined();
+        }
+        if (b.archetype === 'skyship') expect(b.tiers.some((t) => t.under && t.y0 > 60)).toBe(true);
+      }
+    }
+    for (const k of ['egg', 'prism', 'helix', 'lean', 'stack', 'bundle', 'skyship', 'hulk']) expect(seen.has(k)).toBe(true);
+  });
+
+  it('builds the hive: kilometre towers over canyons, bridges and stacked lanes, no coast, no edge', () => {
+    const s = city('sprawl', { world: 'hive' });
+    expect(s.dials.world).toBe('hive');
+    expect(s.superblocks.every((sb) => sb.land)).toBe(true);
+    const hs = s.buildings.map((b) => b.height).sort((a, b) => a - b);
+    expect(hs[Math.floor(hs.length / 2)]!).toBeGreaterThan(650);
+    expect(hs[hs.length - 1]!).toBeGreaterThan(1800);
+    // every lot is a whole-block megastructure
+    expect(s.lots.every((l) => l.mega || l.landmark)).toBe(true);
+    expect(s.structures.filter((x) => x.kind === 'bridge').length).toBeGreaterThan(150);
+    expect(Math.max(...s.lanes.map((l) => l.pts[0]![1]))).toBeGreaterThan(1000);
+    // the sprawl closes round the south too, and stays tall
+    expect(s.outskirts.some((o) => o.rect.z0 > s.bounds.z1)).toBe(true);
+    expect(s.outskirts.filter((o) => o.h > 200).length).toBeGreaterThan(s.outskirts.length * 0.9);
+    const world = new FlightWorld(s.boxes);
+    expect(world.blocked(s.spawn, 4)).toBe(false);
+    expect(s.spawn.y).toBeGreaterThan(150);
+    // the default world is still the coastal city
+    expect(city('sprawl').superblocks.some((sb) => !sb.land)).toBe(true);
   });
 
   it('places giant holograms and light pillars over the city', () => {
@@ -274,6 +326,19 @@ describe('generator', () => {
     }
     for (const g of s.signs) expect(Number.isFinite(g.x + g.y + g.z + g.w + g.h)).toBe(true);
   });
+
+  it('tags the emitters the renderer also draws as local lights', () => {
+    const s = city('sprawl');
+    const n = (src: string): number => s.emitters.filter((e) => e.src === src).length;
+    // nearly every sign has a tagged emitter (a few transit signs light only themselves)
+    expect(n('sign')).toBeGreaterThan(s.signs.length * 0.95);
+    expect(n('sign')).toBeLessThanOrEqual(s.signs.length);
+    expect(n('lamp')).toBeGreaterThan(500);
+    expect(n('festoon')).toBeGreaterThan(50);
+    expect(n('window')).toBeGreaterThan(1000);
+    // street-level local lights sit near the ground, signs at most a few hundred metres up
+    for (const e of s.emitters) if (e.src === 'lamp' || e.src === 'fire' || e.src === 'festoon') expect(e.y).toBeLessThan(40);
+  });
 });
 
 describe('flight', () => {
@@ -335,5 +400,31 @@ describe('flight', () => {
     }
     expect(travelled).toBeGreaterThan(1500);
     expect(hits).toBeLessThan(6);
+  });
+
+  it('guided flight tours the hive canyons without getting stuck', () => {
+    const s = city('sprawl', { world: 'hive' });
+    const w = new FlightWorld(s.boxes);
+    const f = new Flight(w);
+    f.ceiling = Math.max(700, w.maxY + 200);
+    f.teleport(s.spawn.x, s.spawn.y, s.spawn.z, s.spawn.yaw);
+    const ap = new Autopilot(s, w);
+    ap.start(f);
+    const c = { x: 0, y: 0, z: 0, boost: false, lookX: 0, lookY: 0 };
+    let travelled = 0;
+    let hits = 0;
+    let px = f.x;
+    let pz = f.z;
+    for (let i = 0; i < 60 * 60; i++) {
+      ap.drive(f, 1 / 60, c);
+      f.lastHit = 0;
+      f.update(1 / 60, c);
+      if (f.lastHit > 4) hits++;
+      travelled += Math.hypot(f.x - px, f.z - pz);
+      px = f.x;
+      pz = f.z;
+    }
+    expect(travelled).toBeGreaterThan(1500);
+    expect(hits).toBeLessThan(10);
   });
 });

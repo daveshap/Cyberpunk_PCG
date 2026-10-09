@@ -44,6 +44,8 @@ export interface Zoning {
   cell: Int32Array;
   coastZ: (x: number) => number;
   seed: number;
+  /** The hive: no coast, kilometre-scale towers (see Dials.world). */
+  hive: boolean;
 }
 
 function lines(rng: Rng, half: number, min: number, max: number): number[] {
@@ -88,7 +90,9 @@ export function makeZoning(rng: Rng, dials: Dials): Zoning {
   const linesX = xs.map((x, i) => mk('z', i, x, hiX, blX));
   const linesZ = zs.map((z, i) => mk('x', i, z, hiZ, blZ));
 
+  const hive = dials.world === 'hive';
   // ---- coast: the south edge is sea; each column keeps 1-2 fewer land rows, noisy but smooth
+  // (the hive has no coast: the city runs on in every direction)
   const landRows: number[] = [];
   const cr = rng.fork('coast');
   const phase = cr.range(0, 100);
@@ -100,7 +104,9 @@ export function makeZoning(rng: Rng, dials: Dials): Zoning {
   // the bay: make one stretch two rows deep so the coast has a recognisable shape
   const bay = cr.int(Math.max(1, cols - 2)) + 1;
   for (let c = bay - 1; c <= Math.min(cols - 1, bay); c++) landRows[c] = Math.max(2, rows - 2);
+  if (hive) for (let c = 0; c < cols; c++) landRows[c] = rows;
   const coastZ = (x: number): number => {
+    if (hive) return half + 9000;
     let c = 0;
     while (c < cols - 1 && x > (xs[c + 1] as number)) c++;
     return zs[landRows[c] as number] as number;
@@ -356,6 +362,7 @@ export function makeZoning(rng: Rng, dials: Dials): Zoning {
     cell,
     coastZ,
     seed,
+    hive,
   };
 }
 

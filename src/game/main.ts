@@ -10,6 +10,7 @@ import { buildCityRender, type CityRender } from '../render/city';
 import { createPost, type PostHandle } from '../render/post';
 import { HoverCar } from '../render/car';
 import { U } from '../render/tsl';
+import { LLU } from '../render/locallights';
 import { HOLO_T, freezeHolograms, holoHead } from '../render/spectacle';
 import { Input } from './input';
 import { Flight, type FlightControls } from './flight';
@@ -34,13 +35,23 @@ interface QualitySpec {
   fogSteps: number;
   detail: number;
   ssr: { steps: number; scale: number } | null;
+  /** Local lights: reach from the camera (0 = off), street lights per cell, halos per frame. */
+  local: { far: number; k: number; halos: number };
+  /** Ambient occlusion: resolution scale and samples (null = off). */
+  ao: { scale: number; samples: number } | null;
 }
 const QUALITY: Record<string, QualitySpec> = {
-  low: { ratio: 0.75, traa: false, fogScale: 0.33, fogSteps: 8, detail: 260, ssr: null },
-  medium: { ratio: 1, traa: true, fogScale: 0.5, fogSteps: 10, detail: 340, ssr: null },
-  high: { ratio: 1.25, traa: true, fogScale: 0.5, fogSteps: 14, detail: 420, ssr: { steps: 22, scale: 0.5 } },
-  ultra: { ratio: 2, traa: true, fogScale: 0.75, fogSteps: 18, detail: 600, ssr: { steps: 30, scale: 0.5 } },
+  low: { ratio: 0.75, traa: false, fogScale: 0.33, fogSteps: 8, detail: 260, ssr: null, local: { far: 0, k: 0, halos: 0 }, ao: null },
+  medium: { ratio: 1, traa: true, fogScale: 0.5, fogSteps: 10, detail: 340, ssr: null, local: { far: 420, k: 6, halos: 16 }, ao: { scale: 0.5, samples: 8 } },
+  high: { ratio: 1.25, traa: true, fogScale: 0.5, fogSteps: 14, detail: 420, ssr: { steps: 22, scale: 0.5 }, local: { far: 760, k: 12, halos: 40 }, ao: { scale: 0.5, samples: 12 } },
+  ultra: { ratio: 2, traa: true, fogScale: 0.75, fogSteps: 18, detail: 600, ssr: { steps: 30, scale: 0.5 }, local: { far: 1000, k: 12, halos: 40 }, ao: { scale: 0.75, samples: 16 } },
 };
+
+/**
+ * Haze extinction per metre at street level at the default haze dial. Thick enough that
+ * the city recedes: about half the light of a tower 500 m away reaches the eye.
+ */
+const FOG_BASE = 0.0016;
 
 async function main(): Promise<void> {
   const q = new URLSearchParams(location.search);
@@ -58,6 +69,7 @@ async function main(): Promise<void> {
     ...(preset?.dials ?? {}),
     ...(q.get('size') ? { size: Number(q.get('size')) } : {}),
     ...(q.get('alien') ? { alien: Number(q.get('alien')) } : {}),
+    ...(q.get('world') === 'hive' ? { world: 'hive' as const } : {}),
   });
 
   const canvas = document.createElement('canvas');
@@ -70,6 +82,8 @@ async function main(): Promise<void> {
   await renderer.init();
   const backend = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'WebGPU' : 'WebGL2';
   let quality = q.get('q') ?? (backend === 'WebGPU' ? 'high' : 'medium');
+  // ?noguard keeps the quality where it is (the frame-rate guard below lowers it when frames are slow)
+  const noGuard = q.has('noguard');
   if (!QUALITY[quality]) quality = 'medium';
 
   const scene = new THREE.Scene();
@@ -91,8 +105,11 @@ async function main(): Promise<void> {
   scene.add(car.group);
 
   const live: LiveSettings = { fog: Number(q.get('fog') ?? 1), rain: q.has('dry') ? 0 : Number(q.get('rain') ?? 0.6), neon: Number(q.get('neon') ?? 1), traffic: 1, exposure: Number(q.get('exposure') ?? 1) };
+  // the hive's air is a deep, tall murk: it thins out slowly with height, so every level
+  // of the canyons sinks into it (scale height about 1.2 km instead of 220 m)
+  let fogBase = FOG_BASE;
   const applyLive = (s: LiveSettings): void => {
-    U.fogDensity.value = 0.0009 * s.fog;
+    U.fogDensity.value = fogBase * s.fog;
     U.rain.value = s.rain;
     U.wet.value = Math.min(1, 0.35 + s.rain);
     U.neon.value = s.neon;
@@ -111,11 +128,39 @@ async function main(): Promise<void> {
   let post: PostHandle;
 
   const input = new Input(canvas);
+  // debug dials by short name: post-pass uniforms, the shared U uniforms, local lights
+  const tunable = (k: string): { value: unknown } | null => {
+    const alias: Record<string, string> = { localgain: 'gain', halo: 'haloGain', halog: 'haloG' };
+    const key = alias[k] ?? k;
+    const pu = post?.u as Record<string, { value: unknown }> | undefined;
+    if (pu && pu[key]) return pu[key]!;
+    if (key in LLU) return (LLU as Record<string, { value: unknown }>)[key]!;
+    if (key in U) return (U as Record<string, { value: unknown }>)[key]!;
+    return null;
+  };
   const makePost = (): void => {
     const Q = QUALITY[quality]!;
     U.detailDist.value = Q.detail;
+    // local lights by quality; with none (low) surfaces and haze fall back to the baked light alone
+    LLU.near.value = Q.local.far > 0 ? Q.local.far * 0.68 : 0;
+    LLU.far.value = Q.local.far > 0 ? Q.local.far : 1;
+    LLU.kMax.value = Q.local.k;
+    LLU.halos.value = Q.local.halos;
     const ssr = q.has('nossr') ? null : q.has('ssr') ? (Q.ssr ?? { steps: 22, scale: 0.5 }) : Q.ssr;
-    post = createPost(renderer, scene, camera, { traa: Q.traa && !q.has('notaa'), fogScale: Q.fogScale, fogSteps: Q.fogSteps, bloom: true, ssr });
+    const aoQ = q.has('noao') ? null : Q.ao;
+    // free the old chain's render targets before building the new one
+    (post as PostHandle | undefined)?.dispose();
+    post = createPost(renderer, scene, camera, { traa: Q.traa && !q.has('notaa'), fogScale: Q.fogScale, fogSteps: Q.fogSteps, bloom: true, ssr, ao: aoQ });
+    applyT();
+  };
+  // debug: ?t.halo=150&t.localgain=0.5 sets dials by name (see tunable); applied again
+  // after every build, which sets the world's own haze and shafts
+  const applyT = (): void => {
+    for (const [k, v] of q) {
+      if (!k.startsWith('t.')) continue;
+      const u = tunable(k.slice(2));
+      if (u) u.value = Number(v);
+    }
   };
 
   const ui = new Ui(
@@ -161,6 +206,12 @@ async function main(): Promise<void> {
     await nextFrame();
     const t0 = performance.now();
     spec = generateCity({ seed, dials }, () => performance.now());
+    const hive = spec.dials.world === 'hive';
+    fogBase = hive ? 0.0019 : FOG_BASE;
+    U.fogFalloff.value = hive ? 0.0006 : 0.0045;
+    // light from the upper levels comes down the hive's canyons in shafts
+    U.shaft.value = hive ? 0.18 : 0;
+    applyT();
     if (city) {
       scene.remove(city.root);
       city.dispose();
@@ -191,7 +242,7 @@ async function main(): Promise<void> {
       }
     });
     console.info(
-      `[city] seed=${seed} ${spec.stats.buildings} buildings, ${spec.stats.signs} signs, ${spec.stats.kits} kits; gen ${spec.stats.ms.toFixed(0)} ms, render build ${city.stats.buildMs.toFixed(0)} ms (bake ${city.stats.bakeMs.toFixed(0)} ms), ${city.stats.meshes} meshes, ${city.stats.instances} instances, ${(city.stats.triangles / 1e6).toFixed(2)}M tris, ${city.lights.counts.lights} lights, ${city.lights.counts.cars} cars; total ${(performance.now() - t0).toFixed(0)} ms`,
+      `[city] seed=${seed} ${spec.stats.buildings} buildings, ${spec.stats.signs} signs, ${spec.stats.kits} kits; gen ${spec.stats.ms.toFixed(0)} ms, render build ${city.stats.buildMs.toFixed(0)} ms (bake ${city.stats.bakeMs.toFixed(0)} ms), ${city.stats.meshes} meshes, ${city.stats.instances} instances, ${city.stats.localLights} local lights, ${(city.stats.triangles / 1e6).toFixed(2)}M tris, ${city.lights.counts.lights} lights, ${city.lights.counts.cars} cars; total ${(performance.now() - t0).toFixed(0)} ms`,
     );
     ui.setBusy(false);
     building = false;
@@ -338,7 +389,7 @@ async function main(): Promise<void> {
       fps = fpsN / fpsAcc;
       fpsAcc = 0;
       fpsN = 0;
-      if (!still && quality !== 'low' && performance.now() - bootAt > 10000) {
+      if (!still && !noGuard && quality !== 'low' && performance.now() - bootAt > 10000) {
         slowFor = fps < 22 ? slowFor + 0.5 : 0;
         if (slowFor >= 4) {
           slowFor = 0;
@@ -411,6 +462,20 @@ async function main(): Promise<void> {
     /** Debug: force every LED screen to one scene (-1 runs the programmes). */
     screenScene(n: number): void {
       U.screenScene.value = n;
+    },
+    /**
+     * Debug: set lighting and post dials by name (post uniforms, U.*, local lights;
+     * see tunable). Returns the previous values so a caller can restore them.
+     */
+    tune(o: Record<string, number>): Record<string, number> {
+      const prev: Record<string, number> = {};
+      for (const [k, v] of Object.entries(o)) {
+        const u = tunable(k);
+        if (!u) continue;
+        prev[k] = u.value as number;
+        u.value = v;
+      }
+      return prev;
     },
     /** Position and heading of the i-th flyer of a kind (police, medevac, hauler, blimp). */
     flyerPose(kind: string, i: number): number[] | null {

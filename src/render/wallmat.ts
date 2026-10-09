@@ -118,7 +118,7 @@ export function wallSurface(c) {
   const splash = smoothstep(0.45, 0.0, wy).mul(mix(smoothstep(0.55, 0.8, fbmF(vec2(u, wy).mul(14.0), mpp.mul(14.0))), float(0.3), smoothstep(0.01, 0.04, mpp)));
 
   // dirty corners: water runs down the building's edges
-  const dEdge = min(u, wlen.sub(u));
+  const dEdge = c.dEdge ?? min(u, wlen.sub(u));
   const corner = exp(dEdge.negate().div(0.5)).mul(streakNoise(u.mul(3.0), v, 2.0, 0.1).mul(0.6).add(0.4));
 
   // ------------------------------------------------------------- substrates

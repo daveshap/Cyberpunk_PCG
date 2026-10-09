@@ -49,7 +49,7 @@ import {
 } from 'three/tsl';
 import type { CitySpec, Highway, Street } from '../core/types';
 import { hash01 } from '../core/rng';
-import { U, flicker, fogAtten } from './tsl';
+import { U, flicker, pointAtten } from './tsl';
 import { CLS, kitGeometries, makeKitMaterial } from './kits';
 
 /** Per-frame camera terms shared by every sprite material. */
@@ -165,7 +165,7 @@ function makeStaticMaterial(): THREE.MeshBasicNodeMaterial {
   const c = Fn(() => {
     const fl = flicker(vC.y, vC.x);
     const rgb = vB.rgb.mul(profile()).mul(vE).mul(fl).mul(vNear).mul(U.neon);
-    return vec4(fogAtten(rgb, positionWorld), 1.0);
+    return vec4(pointAtten(rgb, positionWorld), 1.0);
   })();
   additiveGlow(m, c);
   return m;
@@ -262,7 +262,7 @@ function makeCarLightMaterial(): THREE.MeshBasicNodeMaterial {
     })(),
     'vCarRGB',
   );
-  const c = Fn(() => vec4(fogAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
+  const c = Fn(() => vec4(pointAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
   additiveGlow(m, c);
   return m;
 }
@@ -355,6 +355,8 @@ export interface PromenadeLamp {
 export const PROMENADE_H = 6;
 
 export function promenade(spec: CitySpec): PromenadeLamp[] {
+  // the hive has no sea front
+  if (spec.dials.world === 'hive') return [];
   const { x0, step: stp, z } = spec.coast;
   const xEnd = x0 + (z.length - 1) * stp;
   const zAt = (x: number): number => (x < x0 ? (z[0] as number) : x > xEnd ? (z[z.length - 1] as number) : (z[Math.max(0, Math.min(z.length - 1, Math.round((x - x0) / stp)))] as number));
@@ -448,15 +450,18 @@ export function buildCityLights(spec: CitySpec, flying?: THREE.InstancedBufferGe
         streetLanes(st, sprawlLanes, 5000 + id);
       }
     };
+    // (the hive's ring closes round the south of the city too)
+    const south = G.inner.z1 < G.extent.z1 - 1;
     for (const x of G.xs) {
       if (x <= G.extent.x0 + 1 || x >= G.extent.x1 - 1) continue;
       const inside = x > G.inner.x0 + 1 && x < G.inner.x1 - 1;
       const zEnd = inside ? G.inner.z0 : x <= G.inner.x0 + 1 ? shoreW : shoreE;
       along('z', x, G.extent.z0, zEnd);
+      if (inside && south) along('z', x, G.inner.z1, G.extent.z1);
     }
     for (const z of G.zs) {
       if (z <= G.extent.z0 + 1 || z >= G.extent.z1 - 1) continue;
-      if (z < G.inner.z0 - 1) along('x', z, G.extent.x0, G.extent.x1);
+      if (z < G.inner.z0 - 1 || (south && z > G.inner.z1 + 1)) along('x', z, G.extent.x0, G.extent.x1);
       else {
         if (z < shoreW) along('x', z, G.extent.x0, G.inner.x0);
         if (z < shoreE) along('x', z, G.inner.x1, G.extent.x1);
@@ -617,7 +622,7 @@ function makeFlyLightMaterial(): THREE.MeshBasicNodeMaterial {
     })(),
     'vFlyRGB',
   );
-  const c = Fn(() => vec4(fogAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
+  const c = Fn(() => vec4(pointAtten(vRGB.mul(profile()).mul(U.neon), positionWorld), 1.0))();
   additiveGlow(m, c);
   return m;
 }

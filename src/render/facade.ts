@@ -16,9 +16,13 @@
  * Vertex attributes (constant per wall):
  *  aF0 (style, floorH, bayW, win)  aF1 (lit, warm, grime, seed)
  *  aF2 (base rgb, strips)           aF3 (accent rgb, wall length)
- *  aF4 (shopH, tierH, taper, media) uv (metres along the wall, metres above the tier base)
- *  (taper: on sloped walls, how far each corner leans in per metre of height;
- *   media: 0 none, 1 LED outline, 2 the city-wide light show)
+ *  aF4 (shopH, tierH, uLeft, media + 4 skin)  aF5 (ring angle, ring bays, ring bay width, uRight)
+ *  uv (metres along the wall, metres above the base of the shell)
+ *  (uLeft / uRight: where the wall's left and right corners are at this height, so corner
+ *   lights follow sloped and folded walls; media: 0 none, 1 LED outline, 2 the city-wide
+ *   light show; skin: 0 none, 1 diagrid, 2 ribs, 3 spandrel bands, 4 megaframe. Smooth
+ *   shells (ring bays > 0) take u from the angle round the ring, so windows and
+ *   structure run on round the curve; they have no corners.)
  */
 import * as THREE from 'three/webgpu';
 import {
@@ -34,6 +38,7 @@ import {
   floor,
   fract,
   fwidth,
+  inverseSqrt,
   length,
   max,
   min,
@@ -56,10 +61,11 @@ import {
 import { U, fresnel, hash12, hash13, lightAt, pin, shade, skyColor, vnoise } from './tsl';
 import { bond, cellular, fbmF, joints, lineAA, nightLightDir, shadeN, streakNoise, throwUp } from './surface';
 import { wallSurface } from './wallmat';
+import { localDiffuse } from './locallights';
 
 export const STYLE_ID = { glass: 0, panel: 1, grid: 2, shop: 3, balcony: 4, metal: 5, raw: 6, lux: 7 } as const;
 
-export const FACADE_EXTRAS = { aF0: 4, aF1: 4, aF2: 4, aF3: 4, aF4: 4 };
+export const FACADE_EXTRAS = { aF0: 4, aF1: 4, aF2: 4, aF3: 4, aF4: 4, aF5: 4 };
 
 /** Smooth box mask on [a, b] with antialias width w. */
 const span = (x, a, b, w) => smoothstep(a.sub(w), a.add(w), x).mul(oneMinus(smoothstep(b.sub(w), b.add(w), x)));
@@ -146,9 +152,11 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const F2 = attribute('aF2', 'vec4');
     const F3 = attribute('aF3', 'vec4');
     const F4 = attribute('aF4', 'vec4');
+    const F5 = attribute('aF5', 'vec4');
+    const ring = step(0.5, F5.y);
     const style = F0.x;
     const fh = F0.y;
-    const bw = F0.z;
+    const bw = select(ring.greaterThan(0.5), F5.z, F0.z);
     const win = F0.w;
     const litF = F1.x;
     const warm = F1.y;
@@ -164,8 +172,8 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const n = normalize(normalWorld);
     // horizontal tangent along the wall (normalised: sloped walls tilt n)
     const tng = normalize(vec3(n.z.negate(), 0.0, n.x).add(vec3(1e-5, 0.0, 0.0)));
-    const taper = F4.z; // sloped walls: corner inset per metre of height
-    const u = uv().x;
+    // smooth shells: metres round the ring at this height (angle x bays x local bay width)
+    const u = select(ring.greaterThan(0.5), F5.x.mul(F5.y).mul(F5.z), uv().x);
     const v = uv().y;
     const toCam = cameraPosition.sub(wp);
     const dist = length(toCam);
@@ -243,6 +251,14 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
           glassTint.assign(vec3(0.7, 0.62, 0.5));
       });
 
+    // spandrel bands (skin 3): the windows of each floor join into one ribbon over a band
+    const skin = floor(F4.w.add(0.5).div(4.0));
+    const isBands = step(2.5, skin).mul(step(skin, 3.5));
+    ax0.assign(mix(ax0, float(0.015), isBands));
+    ax1.assign(mix(ax1, float(0.985), isBands));
+    ay0.assign(mix(ay0, max(ay0, float(0.36)), isBands));
+    ay1.assign(mix(ay1, min(ay1, float(0.93)), isBands));
+
     // ----------------------------------------------------------- shop band
     const inShop = step(0.01, shopH).mul(step(v, shopH));
     const vf = select(inShop.greaterThan(0.5), v, v.sub(shopH.mul(step(0.01, shopH))));
@@ -275,8 +291,14 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     // ------------------------------------------------- wall surface (wallmat.ts)
     // metres per pixel on the wall, taken here in uniform control flow
     const mpp = pin(max(fwidth(u), fwidth(v)).max(1e-4));
-    const S = wallSurface({ u, v, vf, wy: wp.y, n, tng, mpp, near, base, fhE, bwE, sx0, sx1, sy0, sy1, inShop, cu, cv, fu, fv, style, seed, grime, tierH, wlen });
+    // distance to the wall's corners at this height (none round a smooth shell)
+    const uL = u.sub(F4.z);
+    const uR = F5.w.sub(u);
+    const dCornerW = pin(select(ring.greaterThan(0.5), float(1e4), min(uL, uR)));
+    const S = wallSurface({ u, v, vf, wy: wp.y, n, tng, mpp, near, base, fhE, bwE, sx0, sx1, sy0, sy1, inShop, cu, cv, fu, fv, style, seed, grime, tierH, wlen, dEdge: dCornerW });
     const Ld = nightLightDir(n, wp);
+    // light from the signs, lamps and fires near this point, once for every layer here
+    const Eloc = pin(localDiffuse(wp, n), 'vec3');
 
     // ------------------------------------------------- windows
     const inAp = step(sx0, fu).mul(step(fu, sx1)).mul(step(sy0, fv)).mul(step(fv, sy1));
@@ -364,7 +386,7 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
 
     // compose the pane
     const pane = glassCol.mul(glassTint).add(glassEmit.mul(oneMinus(glassDirt.mul(0.2))).mul(oneMinus(boarded)).mul(oneMinus(voidWin))).add(refl).toVar();
-    pane.addAssign(shade(vec3(0.06, 0.055, 0.05), n, wp, float(0.0), float(1.0)).mul(glassDirt.mul(0.5)));
+    pane.addAssign(shade(vec3(0.06, 0.055, 0.05), n, wp, float(0.0), float(1.0), Eloc).mul(glassDirt.mul(0.5)));
     // frames: aluminium, white or dark, round each pane, a meeting rail on sliding windows
     // (homes), a transom on some, mullions across shop fronts; silhouetted against lit rooms
     const aaU = mpp.div(bwE);
@@ -381,15 +403,15 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const frameK = max(max(oneMinus(insideU.mul(insideV)), rail), max(transom, shopMull)).mul(hitGlass).mul(smoothstep(0.07, 0.03, mpp)).mul(step(0.5, style)).mul(oneMinus(boarded));
     const fh3 = hash12(vec2(seed.mul(4.4), 2.9));
     const frameAlb = select(fh3.lessThan(0.5), vec3(0.17, 0.175, 0.18), select(fh3.lessThan(0.8), vec3(0.3, 0.3, 0.29), vec3(0.04, 0.036, 0.032))).mul(oneMinus(grime.mul(0.4)));
-    const frameLit = shade(frameAlb, n, wp, float(0.35), float(0.4)).add(lc.mul(isLitE).mul(U.winGain).mul(0.025));
+    const frameLit = shade(frameAlb, n, wp, float(0.35), float(0.4), Eloc).add(lc.mul(isLitE).mul(U.winGain).mul(0.025));
     pane.assign(mix(pane, frameLit, frameK));
     pane.assign(mix(pane, vec3(0.006), voidWin));
     // boarded windows: weathered plywood sheets with grain and screw lines
     const plyGrain = vnoise(vec2(gu.mul(bwE).mul(1.5), gv.mul(fhE).mul(28.0)).add(h1.mul(30.0)));
     const plySheet = step(0.5, fract(gu.mul(bwE).div(1.2)));
     const plyC = vec3(0.24, 0.17, 0.1).mul(mix(0.75, 1.15, plyGrain)).mul(mix(0.85, 1.05, plySheet)).mul(oneMinus(grime.mul(0.45)));
-    pane.assign(mix(pane, shade(plyC, n, wp, float(0.02), float(0.9)), boarded));
-    pane.assign(mix(pane, shade(shutterC, n, wp, float(0.25), float(0.6)), shutter));
+    pane.assign(mix(pane, shade(plyC, n, wp, float(0.02), float(0.9), Eloc), boarded));
+    pane.assign(mix(pane, shade(shutterC, n, wp, float(0.25), float(0.6), Eloc), shutter));
 
     // ------------------------------------------------- compose wall + window
     // a lit window lights the wall round it a little, most of all the sill and the wall
@@ -398,9 +420,9 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const dWy = max(max(sy0.sub(fv), fv.sub(sy1)), float(0.0)).mul(fhE);
     const below = step(fv, sy0);
     const winSpill = exp(length(vec2(dWx, dWy)).negate().div(mix(0.22, 0.4, below))).mul(mix(0.45, 1.0, below)).mul(oneMinus(inAp)).mul(oneMinus(inShop.mul(0.5)));
-    const wallLit = shadeN(S.alb, n, S.nb, wp, S.spec, S.rough, S.cav, Ld).add(S.alb.mul(lc).mul(isLitE).mul(U.winGain).mul(0.05).mul(winSpill).mul(oneMinus(boarded)));
+    const wallLit = shadeN(S.alb, n, S.nb, wp, S.spec, S.rough, S.cav, Ld, Eloc).add(S.alb.mul(lc).mul(isLitE).mul(U.winGain).mul(0.05).mul(winSpill).mul(oneMinus(boarded)));
     // the reveal is lit by the room behind the glass
-    const recessC = shade(revealC, n, wp, float(0.02), float(1.0)).add(lc.mul(isLitE).mul(U.winGain).mul(0.05).mul(oneMinus(boarded)));
+    const recessC = shade(revealC, n, wp, float(0.02), float(1.0), Eloc).add(lc.mul(isLitE).mul(U.winGain).mul(0.05).mul(oneMinus(boarded)));
     const winMix = inAp.mul(oneMinus(fascia));
     const detailed = mix(wallLit, mix(recessC, pane, hitGlass), winMix);
     // far average: window fraction times average pane brightness
@@ -455,10 +477,8 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     // ------------------------------------------------- emissive strips
     // corner lines widen on big walls so a 300 m pyramid ridge still reads from afar
     const stripW = clamp(wlen.mul(0.004), 0.12, 1.0);
-    // corner lines follow the corners, which lean inward on tapered tiers
-    const uL = u.sub(taper.mul(v));
-    const uR = wlen.sub(taper.mul(v)).sub(u);
-    const cornerStrip = max(smoothstep(stripW.mul(2.0), float(0.0), uL), smoothstep(stripW.mul(2.0), float(0.0), uR)).mul(step(0.45, strips));
+    // corner lines follow the corners (which lean on tapered and folded walls); smooth shells have none
+    const cornerStrip = max(smoothstep(stripW.mul(2.0), float(0.0), uL), smoothstep(stripW.mul(2.0), float(0.0), uR)).mul(step(0.45, strips)).mul(oneMinus(ring));
     // light lines only on the odd mechanical floor, not every slab
     const floorStrip = smoothstep(0.035, 0.0, abs(fv.sub(0.0)).min(abs(fv.sub(1.0)))).mul(step(0.62, strips)).mul(step(0.86, hash12(vec2(cv.mul(1.37).add(3.1), seed.mul(7.7))))).mul(oneMinus(inShop));
     const crown = smoothstep(1.4, 0.0, tierH.sub(v)).mul(step(0.3, strips));
@@ -472,10 +492,37 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     const crownWash = smoothstep(tierH.sub(22.0), tierH, v).mul(step(30.0, tierH)).mul(0.3);
     col.addAssign(accent.mul(upWash.add(crownWash)).mul(washable).mul(strips.mul(0.8).add(0.2)).mul(oneMinus(winMix.mul(hitGlass).mul(0.6))).mul(U.neon));
 
+    // ------------------------------------------------- structure over the glass
+    // diagrid (1): diagonal members two bays wide and three floors tall, with a hoop at every
+    // node row; ribs (2): a fin every second bay; megaframe (4): giant cross braces eight
+    // bays wide and twelve floors tall. Round a smooth shell u is the arc, so the members
+    // wrap the curve and close up as the shell narrows.
+    const isFrame = step(3.5, skin);
+    const isRibs = step(1.5, skin).mul(step(skin, 2.5));
+    const onSkin = step(0.5, skin).mul(oneMinus(isBands)).mul(oneMinus(inShop));
+    const mW = bw.mul(select(isFrame.greaterThan(0.5), float(8.0), float(2.0)));
+    const mH = fh.mul(select(isFrame.greaterThan(0.5), float(12.0), float(3.0)));
+    const sa = u.div(mW);
+    const sb = v.div(mH);
+    const perUnit = inverseSqrt(mW.mul(mW).reciprocal().add(mH.mul(mH).reciprocal()));
+    const dD1 = abs(fract(sa.add(sb).add(0.5)).sub(0.5)).mul(perUnit);
+    const dD2 = abs(fract(sa.sub(sb).add(0.5)).sub(0.5)).mul(perUnit);
+    const dHoop = abs(fract(sb.add(0.5)).sub(0.5)).mul(mH);
+    const memberW = select(isFrame.greaterThan(0.5), float(1.4), float(0.36));
+    const diag = max(max(lineAA(dD1, memberW, mpp), lineAA(dD2, memberW, mpp)), lineAA(dHoop, memberW.mul(0.55), mpp));
+    const dRib = abs(fract(u.div(bw.mul(2.0))).sub(0.5)).mul(bw.mul(2.0));
+    const ribK = lineAA(dRib, float(0.22), mpp);
+    const skinK = select(isRibs.greaterThan(0.5), ribK, diag).mul(onSkin);
+    const memberAlb = mix(vec3(0.045, 0.048, 0.055), base.mul(0.85), isFrame.mul(0.7));
+    const memberLit = shade(memberAlb, n, wp, float(0.45), float(0.4), Eloc);
+    col.assign(mix(col, memberLit, skinK));
+    // on bright towers the structure carries thin light lines
+    col.addAssign(accent.mul(skinK).mul(step(0.7, strips)).mul(oneMinus(isRibs)).mul(0.8).mul(U.neon));
+
     // gold trims on lux
     If(style.greaterThan(6.5), () => {
       const trim = oneMinus(inAp).mul(step(sx0.sub(0.04), fu).mul(step(fu, sx1.add(0.04))).mul(step(sy0.sub(0.04), fv)).mul(step(fv, sy1.add(0.04))));
-      col.assign(mix(col, shade(vec3(0.6, 0.42, 0.16), n, wp, float(0.8), float(0.3)), trim.mul(detail)));
+      col.assign(mix(col, shade(vec3(0.6, 0.42, 0.16), n, wp, float(0.8), float(0.3), Eloc), trim.mul(detail)));
     });
     // ------------------------------------------------- LED media facades
     // (comps: Chongqing and Shanghai riverfronts, Hong Kong's harbour front) LED lines on
@@ -486,8 +533,8 @@ export function makeFacadeMaterial(): THREE.MeshBasicNodeMaterial {
     // Derivatives are taken here, outside the branch (they need uniform control flow).
     const mppV = pin(fwidth(v).max(1e-4));
     const mppU = pin(fwidth(u).max(1e-4));
-    const dCorner = pin(min(uL, uR));
-    const media = F4.w;
+    const dCorner = dCornerW;
+    const media = F4.w.mod(4.0);
     If(media.greaterThan(0.5), () => {
       const line = (d, half, mpp) => {
         const w = max(half, mpp.mul(0.7));

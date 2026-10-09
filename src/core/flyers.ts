@@ -52,8 +52,9 @@ export function makeFlyers(z: Zoning, buildings: readonly Building[], streets: r
   const sky = new Skyline(buildings);
   const B = z.bounds;
 
-  // ---- ad airships: wide tilted ellipses lifted over the roofs along them
-  {
+  // ---- ad airships: wide tilted ellipses lifted over the roofs along them (in the hive,
+  // where the roofs are kilometres up, they cruise the canyons instead: see below)
+  if (!z.hive) {
     const r = rng.fork('blimps');
     const picks: District[] = [];
     for (const k of BLIMP_ORDER) for (const d of z.districts) if (d.kind === k && picks.length < 5 && !picks.some((p) => Math.hypot(p.x - d.x, p.z - d.z) < 500)) picks.push(d);
@@ -107,7 +108,7 @@ export function makeFlyers(z: Zoning, buildings: readonly Building[], streets: r
     ];
     return r.chance(0.5) ? pts : pts.reverse();
   };
-  const addLoops = (kind: 'police' | 'medevac' | 'hauler', n: number, span: number, y: [number, number], speed: [number, number], count: [number, number]): void => {
+  const addLoops = (kind: FlyerRoute['kind'], n: number, span: number, y: [number, number], speed: [number, number], count: [number, number]): void => {
     const r = rng.fork(kind + '-loops');
     let tries = 0;
     let made = 0;
@@ -120,16 +121,25 @@ export function makeFlyers(z: Zoning, buildings: readonly Building[], streets: r
       made++;
     }
   };
-  // heights sit between the car bands (26, 42, 64, 96, 140, 200)
-  addLoops('police', 5, 2, [104, 122], [30, 38], [1, 2]);
-  addLoops('medevac', 3, 3, [150, 168], [46, 56], [1, 1]);
-  addLoops('hauler', 4, 3, [50, 56], [15, 21], [2, 4]);
+  if (z.hive) {
+    // between the hive's car bands (34, 70, 120, 185, 260, 350, 460, 590, 740...)
+    addLoops('police', 7, 2, [148, 166], [30, 38], [1, 2]);
+    addLoops('medevac', 4, 3, [298, 322], [46, 56], [1, 1]);
+    addLoops('hauler', 5, 3, [90, 104], [15, 21], [2, 4]);
+    addLoops('blimp', 4, 2, [515, 545], [6, 9], [1, 1]);
+  } else {
+    // heights sit between the car bands (26, 42, 64, 96, 140, 200)
+    addLoops('police', 5, 2, [104, 122], [30, 38], [1, 2]);
+    addLoops('medevac', 3, 3, [150, 168], [46, 56], [1, 1]);
+    addLoops('hauler', 4, 3, [50, 56], [15, 21], [2, 4]);
+  }
 
   // ---- incidents: police rings over a street in the loud districts
   {
     const r = rng.fork('incidents');
     const hot = streets.filter((s) => {
-      if (s.kind !== 'local' || s.hi - s.lo < 90) return false;
+      // (the hive's canyons are too narrow for a ring of patrol units: no incidents there)
+      if (z.hive || s.kind !== 'local' || s.hi - s.lo < 90) return false;
       const d = z.districts[s.district];
       return s.use === 'nightlife' || d?.kind === 'jpmarket' || d?.kind === 'cnmarket' || d?.kind === 'decayed';
     });

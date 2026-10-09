@@ -157,10 +157,15 @@ export function addSign(s: SignSpec, T: SignTargets): void {
         addCapsule(T.tube, a[0] + nx * 0.06, a[1], a[2] + nz * 0.06, bb[0] + nx * 0.06, bb[1], bb[2] + nz * 0.06, nx, 0, nz, fr, 0.5, col2, seed, 0);
       }
     }
-    // a soft glow in the air in front; building-sized walls light the haze enough on their own
-    const glowR = clamp(s.h * 0.45, 2, 12);
-    const half = Math.max(0, s.w / 2 - glowR * 0.5);
-    addCapsule(T.halo, s.x - rx * half + nx * 0.3, s.y, s.z - rz * half + nz * 0.3, s.x + rx * half + nx * 0.3, s.y, s.z + rz * half + nz * 0.3, nx, 0, nz, glowR, (s.program ?? 0) > 0 ? 0.012 : 0.05, col, seed, 0, 1.7);
+    // a soft glow round the whole panel (glare and haze): a capsule along the long side,
+    // wide enough to reach past the short sides; building-sized walls glow tens of metres
+    const shortHalf = Math.min(s.w, s.h) / 2;
+    const glowR = shortHalf + clamp(shortHalf * 0.4, 1.2, 14);
+    const half = Math.max(0, Math.max(s.w, s.h) / 2 - shortHalf);
+    const ux = s.h > s.w ? 0 : rx;
+    const uy = s.h > s.w ? 1 : 0;
+    const uz = s.h > s.w ? 0 : rz;
+    addCapsule(T.halo, s.x - ux * half + nx * 0.3, s.y - uy * half, s.z - uz * half + nz * 0.3, s.x + ux * half + nx * 0.3, s.y + uy * half, s.z + uz * half + nz * 0.3, nx, 0, nz, glowR, (s.program ?? 0) > 0 ? 0.035 : 0.05, col, seed, 0, 1.7);
     return;
   }
   if (s.kind === 'holo') {

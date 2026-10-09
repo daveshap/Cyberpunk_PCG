@@ -101,6 +101,9 @@ export class Autopilot {
   private altitudeFor(x: number, z: number): number {
     const tall = this.world.heightAround(x, z, 60);
     const r = this.rnd();
+    // the hive: cruise one of its traffic levels (bridges keep clear of them), from the
+    // dark lower canyons to high among the towers
+    if (this.spec.dials.world === 'hive') return [120, 185, 260, 350, 460, 590, 740][Math.floor(r * 7)] as number;
     // usually canyon level, sometimes skim the tower tops; always over the metro
     if (r < 0.2) return Math.min(260, Math.max(90, tall * 0.7));
     const y = 28 + r * 70;

@@ -135,6 +135,62 @@ procedural (`render/surface.ts`, `render/wallmat.ts`).
 - Posters are invented layouts (blocks and bars, no words); graffiti letters are random Latin letters
   from the sign atlas. No real tags, brands or names.
 
+## Light and air
+
+The night has to be lit by the things in it. A sign that glows but lights nothing round it reads as a sticker,
+and a street lit evenly from nowhere reads as a 2004 game.
+
+- **Signs light what is next to them.** Every sign is an area light in its own colour: the wall round it, the
+  pavement under it, the awning and the car passing it. A flat sign lights only the street side of its wall; a
+  blade lights the wall on both sides of it. Light falls off fast (inverse square), so walls are bright next to
+  their signs and dark between them. Lamps throw pools straight down, fires flicker, and festoons warm the street
+  under them.
+- **The air glows round lights.** Each bright light has a compact halo in the haze, a few metres round a sign or a
+  lamp. It is stronger in rain and when you look toward the light, and the walls in front of it cut it off. Ad
+  walls glow round the whole panel. Keep halos compact and the bloom's knee soft: a street full of overlapping
+  halos turns into a milky veil and kills the contrast the neon needs.
+- **Distance gets darker.** Near streets are lit by the signs in them. The haze between the eye and a far tower
+  takes about half its light at 500 m and most of it past a kilometre, and its own glow stays dark except where
+  the city's light is. Towers fade into the murk with distance instead of standing crisp to the horizon.
+- **The coarse light volume is bounce light** near the camera (a low wash under the local lights) and the whole of
+  the city's light far away, where the detail would be under a pixel anyway.
+
+## Shapes
+
+A grid of rectangular prisms reads as a 1970s downtown, however much neon hangs on it. The genre's cities are
+lumpy and lopsided: things are added to buildings, buildings are added to buildings, and the big ones are
+shapes nobody would build today. The rule is that nothing is a plain box if it can help it.
+
+- **A vocabulary of forms** (after the families of complex tall buildings): lathed shells that bulge and
+  close over (eggs), faceted tapers whose walls fold into triangles, twisting towers, slabs that lean or bow
+  over their lot, bundles of tubes, accreted stacks of boxes, hulks with whole buildings bolted to their
+  flanks, and decks carried across rows of slabs. All original designs: take the kind of shape, never a real
+  tower's outline or crown.
+- **Asymmetry**: ordinary towers step back on one or two sides, not evenly all round, so the crown sits
+  off-centre; stacks shove each box toward a different side; annexes hang off a core at random heights.
+- **Curves keep their scale**: a curved tower keeps storey-high windows that run on round it, and its
+  structure (a diagrid, ribs or spandrel bands) wraps the curve and closes up as the shell narrows.
+- **Bolted on**: risers and pipe runs, ducts under the slabs, rooms hung off the wall on brackets in
+  spreading clusters, capsules, catwalks, lift shafts and service cores up the outside, shacks, masts and
+  dishes on the roofs. Grime, culture and accretion bring them; glass and luxury towers stay clean. They grow
+  with the building, so a kilometre tower's pipes are pipes at its scale, and they are what tells the eye how
+  big it is. Vehicles too: a car carries a power pack on one flank and a crate lashed to the deck.
+
+## The hive
+
+The second world is a city-planet. It has to feel overwhelming: suffocating, deep and endless.
+
+- **Scale**: towers from a few hundred metres to three kilometres on whole blocks. Windows stay a storey
+  tall, and pipes, hung rooms, bridges and traffic stay their real size, so the eye counts its way up a
+  wall instead of reading a big box.
+- **Claustrophobia**: the canyons are narrower than the towers are wide, and bridges and decks cross them
+  again and again on the way up. Traffic stacks up the canyons on a dozen levels. Most views have neither
+  ground nor sky in them.
+- **Light comes from above**: a slit of sky lit by the upper levels, cut into shafts by the towers and
+  bridges. The air near the tops glows; the depths are dark, lit only by windows, signs and traffic.
+- **No edge**: no coast, no horizon of low sprawl. Megatowers ring the city on every side and the haze
+  takes them.
+
 ## Spectacle
 
 - **Giant holograms** are projections, not solids: a faint fill, a hot fresnel rim, a construction grid,

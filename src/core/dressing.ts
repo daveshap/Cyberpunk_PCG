@@ -7,7 +7,7 @@
  * projecting framed signs and AC boxes, and an American street billboards,
  * marquees and rooftop letters.
  */
-import type { Block, Building, Culture, District, DistrictKind, Emitter, KitInstance, KitKind, LandUse, Lot, RGB, RoadPiece, SignKind, SignSpec, SteamVent, Street, Structure, Tier, Vec2 } from './types';
+import type { Block, Building, Culture, District, DistrictKind, Emitter, EmitterSrc, KitInstance, KitKind, LandUse, Lot, RGB, RoadPiece, SignKind, SignSpec, SteamVent, Street, Structure, Tier, Vec2 } from './types';
 import type { Zoning } from './zoning';
 import { PROFILES, tuneMul } from './profiles';
 import { Rng, clamp, hash01, lerp } from './rng';
@@ -89,8 +89,10 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
   const emitters: Emitter[] = [];
   const steam: SteamVent[] = [];
 
-  const emit = (x: number, y: number, zz: number, c: RGB, k: number, radius: number): void => {
-    emitters.push({ x, y, z: zz, r: c[0] * k, g: c[1] * k, b: c[2] * k, radius });
+  const emit = (x: number, y: number, zz: number, c: RGB, k: number, radius: number, src?: EmitterSrc): void => {
+    const e: Emitter = { x, y, z: zz, r: c[0] * k, g: c[1] * k, b: c[2] * k, radius };
+    if (src) e.src = src;
+    emitters.push(e);
   };
   const kit = (kind: KitKind, x: number, y: number, zz: number, rot: number, sx: number, sy: number, sz: number, col: RGB, e = 0, seed = 0): void => {
     if (kits.length >= KIT_CAP) return;
@@ -186,7 +188,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               seed: r.next(),
             };
             signs.push(sp);
-            emit(sp.x + w.nx * 2, sp.y - 0.5, sp.z + w.nz * 2, c, sp.intensity * sw * 0.18 * (sp.flicker === 3 ? 0 : 1), clamp(sw * 1.6, 6, 18));
+            emit(sp.x + w.nx * 2, sp.y - 0.5, sp.z + w.nz * 2, c, sp.intensity * sw * 0.18 * (sp.flicker === 3 ? 0 : 1), clamp(sw * 1.6, 6, 18), 'sign');
           }
           // ---- awnings in markets
           if (market && r.chance(0.28)) structures.push({ kind: 'awning', p: [px - w.tx * uw * 0.45, pz - w.tz * uw * 0.45, px + w.tx * uw * 0.45, pz + w.tz * uw * 0.45, shopH - 0.15, r.range(1.2, 2.2)], col: col(u + 2), col2: [0.05, 0.05, 0.05], seed: r.next() });
@@ -230,7 +232,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               seed: r.next(),
             };
             signs.push(sp);
-            emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.35 * (sp.flicker === 3 ? 0 : 1), clamp(h * 1.8, 8, 22));
+            emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.35 * (sp.flicker === 3 ? 0 : 1), clamp(h * 1.8, 8, 22), 'sign');
           } else if (culture === 'cn' && r.chance(clamp(signDensity * 0.3, 0, 0.85))) {
             // big projecting framed sign over the street
             const sh = Math.min(roomUp - 0.5, r.range(2.6, 7.5));
@@ -266,7 +268,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               seed: r.next(),
             };
             signs.push(sp);
-            emit(sp.x, sp.y, sp.z, c, sp.intensity * sw * sh * 0.12 * (sp.flicker === 3 ? 0 : 1), clamp(sh * 2.2, 8, 26));
+            emit(sp.x, sp.y, sp.z, c, sp.intensity * sw * sh * 0.12 * (sp.flicker === 3 ? 0 : 1), clamp(sh * 2.2, 8, 26), 'sign');
           } else if (culture === 'us' && (u === 0 || (night && u % 2 === 0)) && r.chance(clamp(signDensity * 0.18, 0, night ? 0.85 : 0.6))) {
             // classic vertical letter blade at the corner, or a marquee
             if (r.chance(0.5) && roomUp > 5) {
@@ -301,7 +303,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
                 seed: r.next(),
               };
               signs.push(sp);
-              emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.3, clamp(h * 2, 8, 20));
+              emit(sp.x, sp.y, sp.z, c, sp.intensity * h * 0.3, clamp(h * 2, 8, 20), 'sign');
             } else {
               const sw = Math.min(uw * 0.95, r.range(5, 9));
               const c = col(u);
@@ -332,7 +334,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
                 seed: r.next(),
               };
               signs.push(sp);
-              emit(sp.x + w.nx * 2, sp.y, sp.z + w.nz * 2, c, sp.intensity * sw * 0.4, 18);
+              emit(sp.x + w.nx * 2, sp.y, sp.z + w.nz * 2, c, sp.intensity * sw * 0.4, 18, 'sign');
             }
           }
         }
@@ -371,7 +373,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               twoSided: false,
               seed: r.next(),
             });
-            emit(w.a[0] + w.tx * along + w.nx * 10, y, w.a[1] + w.tz * along + w.nz * 10, c, 2.2 * sw * sh * 0.025, clamp(sw * 1.5, 18, 50));
+            emit(w.a[0] + w.tx * along + w.nx * 10, y, w.a[1] + w.tz * along + w.nz * 10, c, 2.2 * sw * sh * 0.025, clamp(sw * 1.5, 18, 50), 'sign');
           }
         }
       }
@@ -381,13 +383,13 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
     const topWalls = wallsOf(top, top.top ?? top.poly);
     if (signs.length < SIGN_CAP && topWalls.length > 0) {
       const tw = topWalls.reduce((m, w) => (w.len > m.len ? w : m), topWalls[0] as Wall);
-      if ((d.kind === 'corporate' || b.archetype === 'spire' || b.archetype === 'needle') && !top.top && b.height > 90 && r.chance(0.55 + 0.3 * s.edge)) {
+      if ((d.kind === 'corporate' || b.archetype === 'spire' || b.archetype === 'needle') && !top.top && top.poly.length <= 8 && b.height > 90 && r.chance(0.55 + 0.3 * s.edge)) {
         // giant logo near the crown, on the two widest faces
         const faces = topWalls.slice().sort((p, q) => q.len - p.len).slice(0, 2);
         const logoText = roofWord(r);
         const c = col(r.int(3));
         for (const f of faces) {
-          const sw = Math.min(f.len * 0.7, 36);
+          const sw = Math.min(f.len * 0.7, z.hive ? 130 : 36);
           const sh = sw * 0.32;
           const cx = (f.a[0] + f.b[0]) / 2;
           const cz = (f.a[1] + f.b[1]) / 2;
@@ -417,7 +419,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
             twoSided: false,
             seed: r.next(),
           });
-          emit(cx + f.nx * 12, top.y1 - sh, cz + f.nz * 12, c, sw * sh * 0.04, clamp(sw * 1.4, 20, 60));
+          emit(cx + f.nx * 12, top.y1 - sh, cz + f.nz * 12, c, sw * sh * 0.04, clamp(sw * 1.4, 20, 60), 'sign');
         }
       } else if (top.roof === 'flat' && b.height > 10 && b.height < 90 && tw.len > 6 && r.chance(clamp((b.culture === 'cn' ? 0.08 : 0.14) + 0.25 * s.flash * prof.signs * 0.3 + (night ? 0.4 : 0), 0, night ? 0.85 : 0.55))) {
         // rooftop letters or a framed billboard facing the widest street side
@@ -454,7 +456,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           twoSided: !isBoard,
           seed: r.next(),
         });
-        emit(cx + tw.nx * 6, top.y1 + 3, cz + tw.nz * 6, c, sw * sh * 0.05, clamp(sw * 1.5, 10, 30));
+        emit(cx + tw.nx * 6, top.y1 + 3, cz + tw.nz * 6, c, sw * sh * 0.05, clamp(sw * 1.5, 10, 30), 'sign');
       }
     }
 
@@ -471,7 +473,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           .sort((a, c) => c.len - a.len)[0];
         if (f) {
           const span = t.y1 - t.y0;
-          const sw = Math.min(f.len * 0.84, 66);
+          const sw = Math.min(f.len * 0.84, z.hive ? 230 : 66);
           const portrait = rm.chance(0.6);
           const sh = Math.min(span * 0.75, portrait ? sw * rm.range(1.4, 2.3) : sw * rm.range(0.5, 0.72));
           if (sh > 16) {
@@ -510,7 +512,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
               program: 1,
             });
             megaScreens++;
-            emit(f.a[0] + f.tx * along + f.nx * 25, y, f.a[1] + f.tz * along + f.nz * 25, c, sw * sh * 0.0004, clamp(Math.max(sw, sh) * 0.8, 30, 70));
+            emit(f.a[0] + f.tx * along + f.nx * 25, y, f.a[1] + f.tz * along + f.nz * 25, c, sw * sh * 0.0004, clamp(Math.max(sw, sh) * 0.8, 30, 70), 'sign');
           }
         }
       }
@@ -558,7 +560,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
             program: glyphy ? 1 : 0,
           });
           roofHolos++;
-          emit(cx, top.y1 + hh * 0.5, cz, c, hw * hh * 0.004, clamp(hh, 10, 26));
+          emit(cx, top.y1 + hh * 0.5, cz, c, hw * hh * 0.004, clamp(hh, 10, 26), 'sign');
         }
       }
     }
@@ -634,6 +636,8 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
 
     // ---- roof kits
     for (const t of b.tiers) {
+      // inside a shell (a tier that carries on into the one above) there is no roof
+      if (t.seam) continue;
       if (t.y1 < b.height - 0.1 && !(t.roof === 'flat' && r.chance(0.35))) continue;
       const cap = t.top ?? t.poly;
       // round footprints (discs) use their inscribed square so kits stay on the roof
@@ -671,10 +675,12 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           kit('beacon', p[0] - Math.sign(p[0] - (bx0 + bx1) / 2) * 0.8, y + 0.4, p[1] - Math.sign(p[1] - (bz0 + bz1) / 2) * 0.8, 0, 0.35, 0.35, 0.35, red, 6, r.next());
         }
       }
-      if (b.archetype === 'needle' && t.y1 >= b.height - 0.1) {
+      if ((b.archetype === 'needle' || b.archetype === 'prism' || b.archetype === 'egg') && t.y1 >= b.height - 0.1) {
         const cx = (bx0 + bx1) / 2;
         const cz = (bz0 + bz1) / 2;
-        kit('antenna', cx, y, cz, 0, 0.6, r.range(30, 60), 0.6, [0.4, 0.4, 0.42], 0, r.next());
+        // a faceted taper ends in a spire; a lathed shell carries a short mast on its lantern
+        const h = b.archetype === 'prism' ? clamp(b.height * r.range(0.14, 0.24), 25, 120) : b.archetype === 'egg' ? r.range(8, 22) : r.range(30, 60);
+        kit('antenna', cx, y, cz, 0, b.archetype === 'prism' ? 0.9 : 0.6, h, b.archetype === 'prism' ? 0.9 : 0.6, [0.4, 0.4, 0.42], 0, r.next());
       }
     }
 
@@ -683,21 +689,42 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
       const f = t.facade;
       if (t.y1 - t.y0 < 6) continue;
       const lc = f.warm > 0.5 ? WARM : COOL;
-      const band = 45;
+      // (a kilometre tower bakes its window light in taller bands)
+      const band = Math.max(45, b.height / 24);
       for (let y = t.y0; y < t.y1; y += band) {
         const h = Math.min(band, t.y1 - y);
         // a tapered tier's walls lean in: take the outline at the band's middle
-        for (const w of wallsOf(t, polyAt(t, y + h / 2))) {
+        const ring = polyAt(t, y + h / 2);
+        if (t.smooth || ring.length > 10) {
+          // a curved (or many-sided) shell: its facets are narrow, so light it in arcs
+          const arcs = 6;
+          const n = ring.length;
+          const [rcx, rcz] = [ring.reduce((a2, p) => a2 + p[0], 0) / n, ring.reduce((a2, p) => a2 + p[1], 0) / n];
+          let per = 0;
+          for (let i = 0; i < n; i++) per += Math.hypot((ring[(i + 1) % n] as Vec2)[0] - (ring[i] as Vec2)[0], (ring[(i + 1) % n] as Vec2)[1] - (ring[i] as Vec2)[1]);
+          for (let k = 0; k < arcs; k++) {
+            const p = ring[Math.floor(((k + 0.5) / arcs) * n) % n] as Vec2;
+            const dx = p[0] - rcx;
+            const dz = p[1] - rcz;
+            const dl = Math.hypot(dx, dz) || 1;
+            const len = per / arcs;
+            const kk = f.lit * f.win * len * h * 0.0016;
+            if (kk < 0.05) continue;
+            emit(p[0] + (dx / dl) * 7, y + h / 2, p[1] + (dz / dl) * 7, lc, kk, clamp(Math.max(len, h) * 0.6, 12, 55), 'window');
+          }
+          continue;
+        }
+        for (const w of wallsOf(t, ring)) {
           if (w.len < 8) continue;
           const k = f.lit * f.win * w.len * h * 0.0016;
           if (k < 0.05) continue;
           const cx = (w.a[0] + w.b[0]) / 2 + w.nx * 7;
           const cz = (w.a[1] + w.b[1]) / 2 + w.nz * 7;
-          emit(cx, y + h / 2, cz, lc, k, clamp(Math.max(w.len, h) * 0.6, 12, 55));
+          emit(cx, y + h / 2, cz, lc, k, clamp(Math.max(w.len, h) * 0.6, 12, 55), 'window');
         }
       }
       const cap = t.top ?? t.poly;
-      if (f.strips > 0.35 && t.y1 > 40) {
+      if (f.strips > 0.35 && t.y1 > 40 && !t.seam) {
         const cx = cap.reduce((a, p) => a + p[0], 0) / cap.length;
         const cz = cap.reduce((a, p) => a + p[1], 0) / cap.length;
         emit(cx, t.y1, cz, f.accent, f.strips * 2.5, 40);
@@ -798,7 +825,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         if (r.chance(0.06 + 0.25 * s.grime * s.grime + 0.3 * Math.max(0, d.tune.decay))) continue; // dead lamp
         const h = d.kind === 'corporate' || d.kind === 'megablock' ? 9 : 7;
         kit('lamp', x, 0.15, zz, Math.atan2(nx, nz), 1, h, 1, lampCol, 3, r.next());
-        emit(x + nx * 1.6, h - 0.5, zz + nz * 1.6, lampCol, 1.6, 16);
+        emit(x + nx * 1.6, h - 0.5, zz + nz * 1.6, lampCol, 1.6, 16, 'lamp');
         if ((d.kind === 'luxury' || (d.kind === 'corporate' && r.chance(0.5)) || r.chance(Math.max(0, d.tune.budget) * 0.7)) && walk > 2.6 && !r.chance(Math.max(0, d.tune.decay) * 0.8)) {
           const tt = (k + 0.5) / (n + 1);
           if (tt < 1) kit('tree', lerp(x0, x1, tt) - nx * 1.4, 0.15, lerp(z0, z1, tt) - nz * 1.4, r.range(0, 6.28), r.range(2.2, 3.4), r.range(6, 9), 1, [0.05, 0.09, 0.06], 0, r.next());
@@ -834,7 +861,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           const x = onX ? lerp(R.x0 + 4, R.x1 - 4, along) : cx + r.range(-2, 2);
           const zz = onX ? cz + r.range(-2, 2) : lerp(R.z0 + 4, R.z1 - 4, along);
           kit('lamp', x, 0.15, zz, r.range(0, 6.28), 1, 4.5, 1, [1, 0.8, 0.55], 3, r.next());
-          emit(x, 4, zz, [1, 0.78, 0.5], 1.1, 11);
+          emit(x, 4, zz, [1, 0.78, 0.5], 1.1, 11, 'lamp');
           if (r.chance(0.5)) kit('box', x + 1.4, 0.15, zz, r.range(0, 6.28), 1.8, 0.45, 0.6, [0.2, 0.14, 0.1], 0, r.next());
         }
       }
@@ -847,7 +874,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         const sh = sw * r.range(1.1, 1.8);
         const ang = r.range(0, Math.PI * 2);
         signs.push({ kind: 'holo', culture: 'us', x: cx, y: sh / 2 + 3, z: cz, nx: Math.cos(ang), nz: Math.sin(ang), wnx: 0, wnz: 0, w: sw, h: sh, depth: 0, arm: 2.85, text: '', glyphs: [], vertical: false, col: c, col2: d.palette[r.int(d.palette.length)] as RGB, intensity: 1.6 + s.flash, flicker: 0, lightbox: false, frame: false, twoSided: true, seed: r.next() });
-        emit(cx, sh / 2 + 3, cz, c, sw * sh * 0.02, 40);
+        emit(cx, sh / 2 + 3, cz, c, sw * sh * 0.02, 40, 'sign');
       }
     } else if (blk.open === 'yard') {
       const R = blk.rect;
@@ -876,7 +903,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         kit('box', x, 0.1, zz, r.range(0, 6), r.range(1, 4), r.range(0.4, 1.6), r.range(1, 4), [0.3, 0.28, 0.25], 0, r.next());
         if (r.chance(0.18)) {
           kit('barrel', x + 2, 0.15, zz + 1, 0, 0.32, 0.9, 0.32, [0.3, 0.12, 0.06], 0, r.next());
-          emit(x + 2, 1.6, zz + 1, [1, 0.42, 0.12], 2.2, 12);
+          emit(x + 2, 1.6, zz + 1, [1, 0.42, 0.12], 2.2, 12, 'fire');
           steam.push({ x: x + 2, z: zz + 1, h: 0.95, seed: r.next() });
         }
       }
@@ -900,7 +927,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         const b2 = st.axis === 'x' ? [p + r.range(-2, 2), y1, st.pos + half] : [st.pos + half, y1, p + r.range(-2, 2)];
         const c: RGB = cn ? [1, 0.12, 0.06] : jp ? [1, 0.85, 0.6] : r.pick([[1, 0.3, 0.7], [1, 0.75, 0.35], [0.5, 0.6, 1]] as RGB[]);
         structures.push({ kind: 'cables', p: [a[0] as number, a[1] as number, a[2] as number, b2[0] as number, b2[1] as number, b2[2] as number, r.range(0.4, 1.0), 1], col: c, col2: c, seed: r.next() });
-        emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, c, 0.7, 10);
+        emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, c, 0.7, 10, 'festoon');
       }
     } else if (jp || cn || d.kind === 'decayed') {
       for (let p = st.lo + r.range(8, 16); p < st.hi - 8; p += r.range(9, 18)) {
@@ -910,10 +937,10 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         const b2 = st.axis === 'x' ? [p + r.range(-3, 3), y1, st.pos + half] : [st.pos + half, y1, p + r.range(-3, 3)];
         if (cn && r.chance(0.3)) {
           structures.push({ kind: 'cables', p: [a[0] as number, a[1] as number, a[2] as number, b2[0] as number, b2[1] as number, b2[2] as number, r.range(0.6, 1.4), 1], col: [1, 0.12, 0.06], col2: [1, 0.5, 0.15], seed: r.next() });
-          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.25, 0.1], 1.6, 10);
+          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.25, 0.1], 1.6, 10, 'festoon');
         } else if (jp && r.chance(0.2)) {
           structures.push({ kind: 'cables', p: [a[0] as number, a[1] as number, a[2] as number, b2[0] as number, b2[1] as number, b2[2] as number, r.range(0.5, 1.1), 1], col: [1, 0.85, 0.6], col2: [1, 0.55, 0.3], seed: r.next() });
-          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.7, 0.4], 1.2, 10);
+          emit(((a[0] as number) + (b2[0] as number)) / 2, y0 - 1, ((a[2] as number) + (b2[2] as number)) / 2, [1, 0.7, 0.4], 1.2, 10, 'festoon');
         } else if (jp || r.chance(0.35)) {
           structures.push({ kind: 'wires', p: [a[0] as number, a[1] as number + 1.5, a[2] as number, b2[0] as number, b2[1] as number + 1.5, b2[2] as number, r.range(0.4, 1.2), r.intRange(2, 6)], col: [0.02, 0.02, 0.02], col2: [0, 0, 0], seed: r.next() });
         }
