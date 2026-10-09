@@ -89,7 +89,8 @@ export function makeStreets(z: Zoning, rng: Rng, density: number): StreetsResult
       const out: Line[] = [];
       const span = to - from;
       const [smin, smax] = prof.streets.spacing;
-      const target = spacing(smin, smax);
+      // the hive's blocks each hold one megatower: a canyon or two through a superblock
+      const target = z.hive ? r.range(125, 190) : spacing(smin, smax);
       const n = Math.max(0, Math.round(span / target) - 1);
       for (let k = 1; k <= n; k++) {
         let p = from + (span * k) / (n + 1);
@@ -123,7 +124,7 @@ export function makeStreets(z: Zoning, rng: Rng, density: number): StreetsResult
         const w = plate.x1 - plate.x0;
         const h = plate.z1 - plate.z0;
         const deep = Math.min(w, h) > (d.kind === 'jpmarket' || d.kind === 'cnmarket' ? 30 : 70);
-        if (deep && !cell.landmark && r.chance(prof.streets.alley)) {
+        if (deep && !cell.landmark && !z.hive && r.chance(prof.streets.alley)) {
           const aw = r.range(3.2, 4.6);
           const alongX = w >= h; // alley runs along the long axis
           const mid = alongX ? (plate.z0 + plate.z1) / 2 + (r.next() - 0.5) * h * 0.2 : (plate.x0 + plate.x1) / 2 + (r.next() - 0.5) * w * 0.2;
@@ -143,7 +144,7 @@ export function makeStreets(z: Zoning, rng: Rng, density: number): StreetsResult
           let open: Block['open'] = 'none';
           const tn = d.tune;
           // budget buys plazas and parks, decay leaves rubble lots, density fills them in
-          const openP = prof.open * tuneMul(tn.budget, 1.6) * tuneMul(Math.max(0, tn.decay), 1.8) / tuneMul(tn.density, 1.8);
+          const openP = (prof.open * tuneMul(tn.budget, 1.6) * tuneMul(Math.max(0, tn.decay), 1.8)) / tuneMul(tn.density, 1.8) * (z.hive ? 0.2 : 1);
           if (!cell.landmark && r.chance(Math.min(0.45, openP))) {
             open = d.kind === 'corporate' ? 'plaza' : d.kind === 'luxury' ? 'park' : d.kind === 'industrial' ? 'yard' : d.kind === 'decayed' ? 'rubble' : d.kind === 'megablock' ? 'plaza' : 'none';
             if (tn.decay > 0.35 && r.chance(tn.decay * 0.8)) open = 'rubble';

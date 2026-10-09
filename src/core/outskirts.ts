@@ -79,19 +79,23 @@ function lines(rng: Rng, from: number, to: number, p0: number, p1: number): numb
  * @param width how far the sprawl reaches beyond the bounds (m)
  */
 export function makeOutskirts(rng: Rng, bounds: Rect, coastWest: number, coastEast: number, dials: Dials, width = 2100): Outskirts {
-  const gap = 22; // ring road between the city and the sprawl
+  const hive = dials.world === 'hive';
+  const gap = hive ? 34 : 22; // ring road between the city and the sprawl
   const X0 = bounds.x0 - gap;
   const X1 = bounds.x1 + gap;
   const Z0 = bounds.z0 - gap;
+  const Z1 = bounds.z1 + gap;
+  // the hive has no coast: the ring closes round the south as well
+  if (hive) coastWest = coastEast = bounds.z1 + width;
   const extent: Rect = { x0: bounds.x0 - width, z0: bounds.z0 - width, x1: bounds.x1 + width, z1: Math.max(coastWest, coastEast) };
   const xsW = lines(rng.fork('xw'), X0, extent.x0, 95, 150).reverse();
   const xsE = lines(rng.fork('xe'), X1, extent.x1, 95, 150);
-  const xsMid = lines(rng.fork('xm'), X0, X1, 110, 160);
+  const xsMid = lines(rng.fork('xm'), X0, X1, hive ? 130 : 110, hive ? 180 : 160);
   const xs = [...xsW, X0, ...xsMid];
   if (xs[xs.length - 1] !== X1) xs.push(X1);
   xs.push(...xsE);
   const zsN = lines(rng.fork('zn'), Z0, extent.z0, 95, 150).reverse();
-  const zsS = lines(rng.fork('zs'), Z0, extent.z1, 95, 150);
+  const zsS = hive ? [...lines(rng.fork('zm'), Z0, Z1, 130, 180), ...lines(rng.fork('zs'), Z1, extent.z1, 95, 150)] : lines(rng.fork('zs'), Z0, extent.z1, 95, 150);
   const zs = [...zsN, Z0, ...zsS];
 
   const grime = Math.max(0, Math.min(1, 0.45 + 0.35 * dials.grime));
@@ -102,14 +106,15 @@ export function makeOutskirts(rng: Rng, bounds: Rect, coastWest: number, coastEa
       const sw = r.range(12, 18);
       const cell: Rect = { x0: (xs[i] as number) + sw / 2, x1: (xs[i + 1] as number) - sw / 2, z0: (zs[j] as number) + sw / 2, z1: (zs[j + 1] as number) - sw / 2 };
       const cx = (cell.x0 + cell.x1) / 2;
+      const cz = (cell.z0 + cell.z1) / 2;
       // inside the city: skip; south of the shore: clip or skip
-      if (cx > X0 && cx < X1 && (cell.z0 + cell.z1) / 2 > Z0) continue;
+      if (hive ? cx > X0 && cx < X1 && cz > Z0 && cz < Z1 : cx > X0 && cx < X1 && cz > Z0) continue;
       const shore = cx <= X0 ? coastWest : cx >= X1 ? coastEast : Z0;
       cell.z1 = Math.min(cell.z1, shore - 14);
       if (cell.z1 - cell.z0 < 30 || cell.x1 - cell.x0 < 30) continue;
       // distance from the city edge (Chebyshev, outside the bounds)
       const dx = Math.max(bounds.x0 - cx, cx - bounds.x1, 0);
-      const dz = Math.max(bounds.z0 - (cell.z0 + cell.z1) / 2, 0);
+      const dz = Math.max(bounds.z0 - cz, hive ? cz - bounds.z1 : 0, 0);
       const d = Math.max(dx, dz);
       const fall = Math.exp(-d / 850);
       // split the block into lots
@@ -119,7 +124,8 @@ export function makeOutskirts(rng: Rng, bounds: Rect, coastWest: number, coastEa
         const w = L.x1 - L.x0;
         const dd = L.z1 - L.z0;
         const big = Math.max(w, dd);
-        if (big < r.range(46, 84)) continue;
+        // hive blocks stay whole (one megatower each) unless they are long
+        if (big < (hive ? r.range(150, 210) : r.range(46, 84))) continue;
         const t = r.range(0.35, 0.65);
         if (w >= dd) {
           const m = L.x0 + w * t;
@@ -133,7 +139,7 @@ export function makeOutskirts(rng: Rng, bounds: Rect, coastWest: number, coastEa
         k--;
       }
       for (const L of lots) {
-        if (r.chance(0.1)) continue; // yards, car parks
+        if (r.chance(hive ? 0.02 : 0.1)) continue; // yards, car parks
         const ins = r.range(1.5, 5);
         const rect: Rect = { x0: L.x0 + ins, x1: L.x1 - ins, z0: L.z0 + ins, z1: L.z1 - ins };
         if (rect.x1 - rect.x0 < 10 || rect.z1 - rect.z0 < 10) continue;
@@ -141,6 +147,8 @@ export function makeOutskirts(rng: Rng, bounds: Rect, coastWest: number, coastEa
         const fh = (FLOOR[style] ?? 3.3) * r.range(0.95, 1.06);
         let h = (8 + 30 * fall) * r.range(0.55, 1.5);
         if (r.chance(0.012 + 0.05 * fall)) h = r.range(55, 135) * (0.6 + 0.4 * fall);
+        // the hive does not thin out: megatowers to the horizon
+        if (hive) h = r.range(240, 1100) * (r.chance(0.1) ? 1.6 : 1);
         h = Math.max(fh * 2, Math.round(h / fh) * fh);
         const lit = Math.max(0.08, r.range(0.3, 0.55) * (1 - 0.35 * grime));
         const neon = r.chance(0.08 + 0.1 * Math.max(0, dials.flash));
@@ -162,5 +170,5 @@ export function makeOutskirts(rng: Rng, bounds: Rect, coastWest: number, coastEa
       }
     }
   }
-  return { buildings: out, extent, grid: { xs, zs, inner: { x0: X0, z0: Z0, x1: X1, z1: extent.z1 }, extent, coastWest, coastEast } };
+  return { buildings: out, extent, grid: { xs, zs, inner: { x0: X0, z0: Z0, x1: X1, z1: hive ? Z1 : extent.z1 }, extent, coastWest, coastEast } };
 }
