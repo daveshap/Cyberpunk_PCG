@@ -14,7 +14,9 @@ import { LV, TEX, U, VA, VOL_MAX } from './tsl';
 import { LOCAL_SRC } from './locallights';
 
 const H0 = 10;
-const HMAX = 420;
+/** Top of the light volume: the city's towers, or the hive's kilometre ones. */
+const HMAX_CITY = 420;
+const HMAX_HIVE = 3200;
 
 // fast float32 -> float16 (round to nearest, no NaN handling needed for light values)
 const f32 = new Float32Array(1);
@@ -44,6 +46,7 @@ export function bakeLights(spec: CitySpec, gain = 1): BakeResult {
   const W = spec.bounds.x1 - spec.bounds.x0 + margin * 2;
   const D = spec.bounds.z1 - spec.bounds.z0 + margin * 2;
   U.volRect.value.set(x0, z0, 1 / W, 1 / D);
+  const HMAX = spec.dials.world === 'hive' ? HMAX_HIVE : HMAX_CITY;
   const logDen = Math.log(1 + HMAX / H0);
   U.volY.value.set(H0, 1 / logDen);
 

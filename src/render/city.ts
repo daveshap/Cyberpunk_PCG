@@ -11,7 +11,7 @@ import type { Building, CitySpec, District, Emitter, KitInstance, Tier } from '.
 import type { OutskirtBuilding } from '../core/outskirts';
 import { rectPoly } from '../core/geom2d';
 import { PROFILES } from '../core/profiles';
-import { MeshBuilder, addRoofCap, addSlopedWall, addWall, addBox } from './geometry';
+import { MeshBuilder, addRoofCap, addWall, addBox } from './geometry';
 import { FACADE_EXTRAS, STYLE_ID, makeFacadeMaterial, makeRoofMaterial } from './facade';
 import { PLATE_EXTRAS, ROAD_EXTRAS, addPlate, addRoadPiece, buildLandAndSea, makeLandMaterial, makePlateMaterial, makeRoadMaterial, makeSeawallMaterial, makeWaterMaterial } from './ground';
 import { CLS, KitBatch, LOD_DIST, makeKitMaterial, type Inst, type KitGeom, type LodClass } from './kits';
@@ -21,6 +21,7 @@ import { PROP2_EXTRAS, addHighway, addRelief, addStructure, highwayEmitters, mak
 import { makeBeamMaterial, makeGlyphMaterial, makeHaloMaterial, makeHoloMaterial, makeInkMaterial, makeScreenMaterial, makeSteamMaterial, makeTubeMaterial } from './neonmats';
 import { bakeLights } from './lightvolume';
 import { bakeLocalLights, updateHalos } from './locallights';
+import { bakeSkymap } from './skymap';
 import { U } from './tsl';
 import { Traffic } from './traffic';
 import { MetroTrains, addMetro } from './metro';
@@ -95,7 +96,7 @@ class Chunks {
     let b = c.get(cat);
     if (!b) {
       const s = SPEC[cat];
-      b = new MeshBuilder(s.extras, { uv: s.uv ?? true, normals: s.normals ?? true });
+      b = new MeshBuilder(s.extras, { uv: s.uv ?? true, normals: s.normals ?? true, interleave: true });
       c.set(cat, b);
     }
     return b;
@@ -108,35 +109,233 @@ class Chunks {
 const ROOF_CODE: Record<string, number> = { flat: 0, helipad: 1, garden: 2, crown: 3 };
 
 const MEDIA_CODE: Record<string, number> = { outline: 1, show: 2 };
+const SKIN_CODE: Record<string, number> = { diagrid: 1, ribs: 2, bands: 3, frame: 4 };
+
+type P2 = readonly [number, number];
+
+/**
+ * Shells: runs of tiers joined by `seam` are one surface to the facade shader, so they
+ * share one wall coordinate system (v from the shell's base, the shell's full height).
+ */
+function shellSpans(T: readonly Tier[]): { y0: number; y1: number; first: number; last: number }[] {
+  const out: { y0: number; y1: number; first: number; last: number }[] = [];
+  for (let i = 0; i < T.length; ) {
+    let j = i;
+    while (j < T.length - 1 && T[j]!.seam) j++;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (let k = i; k <= j; k++) {
+      y0 = Math.min(y0, T[k]!.y0);
+      y1 = Math.max(y1, T[k]!.y1);
+    }
+    for (let k = i; k <= j; k++) out[k] = { y0, y1, first: i, last: j };
+    i = j + 1;
+  }
+  return out;
+}
+
+function perimeter(p: readonly P2[]): number {
+  let s = 0;
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i]!;
+    const q = p[(i + 1) % p.length]!;
+    s += Math.hypot(q[0] - a[0], q[1] - a[1]);
+  }
+  return s;
+}
+
+/** Outward normal of the facet between bottom edge a->q at y0 and top edge a2->q2 at y1. */
+function facetNormal(a: P2, q: P2, a2: P2, q2: P2, y0: number, y1: number): [number, number, number] {
+  // along the facet: the longer of its two horizontal edges; up the facet: mid to mid
+  const L0 = Math.hypot(q[0] - a[0], q[1] - a[1]);
+  const L1 = Math.hypot(q2[0] - a2[0], q2[1] - a2[1]);
+  const ex = L0 >= L1 ? (q[0] - a[0]) / (L0 || 1) : (q2[0] - a2[0]) / (L1 || 1);
+  const ez = L0 >= L1 ? (q[1] - a[1]) / (L0 || 1) : (q2[1] - a2[1]) / (L1 || 1);
+  const ux = (a2[0] + q2[0]) / 2 - (a[0] + q[0]) / 2;
+  const uy = y1 - y0;
+  const uz = (a2[1] + q2[1]) / 2 - (a[1] + q[1]) / 2;
+  // n = up x along, flipped to face out (outward for a counter-clockwise ring is (ez, -ex))
+  let nx = uy * ez - uz * 0;
+  let ny = uz * ex - ux * ez;
+  let nz = ux * 0 - uy * ex;
+  if (nx * ez - nz * ex < 0) {
+    nx = -nx;
+    ny = -ny;
+    nz = -nz;
+  }
+  const l = Math.hypot(nx, ny, nz) || 1;
+  return [nx / l, ny / l, nz / l];
+}
+
+/**
+ * One wall facet between the bottom edge a->q at y0 and the top edge a2->q2 at y1: plumb,
+ * sloped, twisted or a triangle (either edge may be a point). uv stays metric: u along the
+ * longer edge, v from the shell's base. Each vertex carries where the facet's left and right
+ * corners are at its height (aF4.z, aF5.w), so corner light lines follow any slope.
+ */
+function addFacet(B: MeshBuilder, a: P2, q: P2, a2: P2, q2: P2, y0: number, y1: number, vY0: number, shopH: number, H: number, code: number, accent: readonly number[]): void {
+  const L0 = Math.hypot(q[0] - a[0], q[1] - a[1]);
+  const L1 = Math.hypot(q2[0] - a2[0], q2[1] - a2[1]);
+  if (L0 < 0.05 && L1 < 0.05) return;
+  const top = L0 < 0.05;
+  const o = top ? a2 : a;
+  const tx = top ? (q2[0] - a2[0]) / L1 : (q[0] - a[0]) / L0;
+  const tz = top ? (q2[1] - a2[1]) / L1 : (q[1] - a[1]) / L0;
+  const U = (p: P2): number => (p[0] - o[0]) * tx + (p[1] - o[1]) * tz;
+  const uA = U(a);
+  const uQ = U(q);
+  const uA2 = U(a2);
+  const uQ2 = U(q2);
+  const [nx, ny, nz] = facetNormal(a, q, a2, q2, y0, y1);
+  B.set('aF3', accent[0]!, accent[1]!, accent[2]!, Math.max(L0, L1));
+  B.set('aF4', shopH, H, uA, code);
+  B.set('aF5', 0, 0, 0, uQ);
+  const p0 = B.vert(q[0], y0, q[1], nx, ny, nz, uQ, y0 - vY0);
+  const p1 = B.vert(a[0], y0, a[1], nx, ny, nz, uA, y0 - vY0);
+  B.set('aF4', shopH, H, uA2, code);
+  B.set('aF5', 0, 0, 0, uQ2);
+  const p2 = B.vert(a2[0], y1, a2[1], nx, ny, nz, uA2, y1 - vY0);
+  const p3 = B.vert(q2[0], y1, q2[1], nx, ny, nz, uQ2, y1 - vY0);
+  B.quad(p0, p1, p2, p3);
+}
+
+/** Arc-length fraction of each vertex round a ring (0 at vertex 0), with a closing 1. */
+function arcFractions(p: readonly P2[]): number[] {
+  const P = perimeter(p) || 1;
+  const out = [0];
+  let s = 0;
+  for (let i = 0; i < p.length; i++) {
+    const a = p[i]!;
+    const q = p[(i + 1) % p.length]!;
+    s += Math.hypot(q[0] - a[0], q[1] - a[1]);
+    out.push(s / P);
+  }
+  return out;
+}
+
+function sameRing(a: readonly P2[], b: readonly P2[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (Math.abs(a[i]![0] - b[i]![0]) > 0.01 || Math.abs(a[i]![1] - b[i]![1]) > 0.01) return false;
+  return true;
+}
+
+/** Facet normals of a tier, one per edge. */
+function tierFacetNormals(t: Tier): [number, number, number][] {
+  const top = t.top ?? t.poly;
+  const n = t.poly.length;
+  const out: [number, number, number][] = [];
+  for (let i = 0; i < n; i++) out.push(facetNormal(t.poly[i]!, t.poly[(i + 1) % n]!, top[i]!, top[(i + 1) % n]!, t.y0, t.y1));
+  return out;
+}
+
+/**
+ * A smooth tier: the facets of one curved surface. Normals are averaged round each ring
+ * (and with the tier above or below where they share it), and the facade gets a
+ * continuous angle round the ring with a fixed number of bays, so windows, structure and
+ * light lines run on round the curve instead of restarting on every facet.
+ */
+function addRing(B: MeshBuilder, T: readonly Tier[], ti: number, vY0: number, H: number, code: number, bays: number): void {
+  const t = T[ti]!;
+  const n = t.poly.length;
+  const top = t.top ?? t.poly;
+  const fn = tierFacetNormals(t);
+  const below = ti > 0 && T[ti - 1]!.smooth && sameRing((T[ti - 1]!.top ?? T[ti - 1]!.poly), t.poly) ? tierFacetNormals(T[ti - 1]!) : null;
+  const above = ti < T.length - 1 && T[ti + 1]!.smooth && sameRing(T[ti + 1]!.poly, top) ? tierFacetNormals(T[ti + 1]!) : null;
+  const vn = (i: number, other: [number, number, number][] | null): [number, number, number] => {
+    const j = (i + n - 1) % n;
+    let x = fn[i]![0] + fn[j]![0];
+    let y = fn[i]![1] + fn[j]![1];
+    let z = fn[i]![2] + fn[j]![2];
+    if (other) {
+      x += other[i]![0] + other[j]![0];
+      y += other[i]![1] + other[j]![1];
+      z += other[i]![2] + other[j]![2];
+    }
+    const l = Math.hypot(x, y, z) || 1;
+    return [x / l, y / l, z / l];
+  };
+  const th = arcFractions(t.poly);
+  const P0 = perimeter(t.poly);
+  const P1 = perimeter(top);
+  const f = t.facade;
+  const shopH = t.grounded && t.shopH > 0 ? t.shopH + (t.y0 - vY0) : 0;
+  B.set('aF3', f.accent[0], f.accent[1], f.accent[2], P0);
+  for (let i = 0; i < n; i++) {
+    const i1 = (i + 1) % n;
+    const a = t.poly[i]!;
+    const q = t.poly[i1]!;
+    const a2 = top[i]!;
+    const q2 = top[i1]!;
+    const nA = vn(i, below);
+    const nQ = vn(i1, below);
+    const nA2 = vn(i, above);
+    const nQ2 = vn(i1, above);
+    const tA = th[i]!;
+    const tQ = th[i + 1]!;
+    B.set('aF4', shopH, H, 0, code);
+    B.set('aF5', tQ, bays, P0 / bays, 0);
+    const p0 = B.vert(q[0], t.y0, q[1], nQ[0], nQ[1], nQ[2], tQ * P0, t.y0 - vY0);
+    B.set('aF5', tA, bays, P0 / bays, 0);
+    const p1 = B.vert(a[0], t.y0, a[1], nA[0], nA[1], nA[2], tA * P0, t.y0 - vY0);
+    B.set('aF5', tA, bays, P1 / bays, 0);
+    const p2 = B.vert(a2[0], t.y1, a2[1], nA2[0], nA2[1], nA2[2], tA * P1, t.y1 - vY0);
+    B.set('aF5', tQ, bays, P1 / bays, 0);
+    const p3 = B.vert(q2[0], t.y1, q2[1], nQ2[0], nQ2[1], nQ2[2], tQ * P1, t.y1 - vY0);
+    B.quad(p0, p1, p2, p3);
+  }
+}
 
 function addWalls(b: Building, B: MeshBuilder): void {
-  for (const t of b.tiers) {
+  const T = b.tiers;
+  const S = shellSpans(T);
+  // bays round each smooth shell: fixed from its widest ring, halved where a ring narrows
+  // so windows never squeeze below about two thirds of their width
+  const shellBays = new Map<number, number>();
+  for (let ti = 0; ti < T.length; ti++) {
+    const t = T[ti]!;
+    if (!t.smooth) continue;
+    const s = S[ti]!;
+    let n0 = shellBays.get(s.first);
+    if (n0 === undefined) {
+      let pmax = 0;
+      for (let k = s.first; k <= s.last; k++) pmax = Math.max(pmax, perimeter(T[k]!.poly), perimeter(T[k]!.top ?? T[k]!.poly));
+      n0 = Math.max(8, Math.round(pmax / t.facade.bayW / 8) * 8);
+      shellBays.set(s.first, n0);
+    }
+  }
+  for (let ti = 0; ti < T.length; ti++) {
+    const t = T[ti]!;
     const f = t.facade;
-    const media = MEDIA_CODE[f.media ?? ''] ?? 0;
+    const s = S[ti]!;
+    const H = s.y1 - s.y0;
+    const code = (MEDIA_CODE[f.media ?? ''] ?? 0) + 4 * (t.skin ? (SKIN_CODE[t.skin] ?? 0) : 0);
     B.set('aF0', STYLE_ID[f.style], f.floorH, f.bayW, f.win);
     B.set('aF1', f.lit, f.warm, f.grime, f.seed);
     B.set('aF2', f.base[0], f.base[1], f.base[2], f.strips);
+    if (t.smooth) {
+      let bays = shellBays.get(s.first) ?? 8;
+      const pt = Math.max(perimeter(t.poly), perimeter(t.top ?? t.poly));
+      while (bays >= 16 && pt / bays < f.bayW * 0.66) bays /= 2;
+      addRing(B, T, ti, s.y0, H, code, bays);
+      continue;
+    }
     const n = t.poly.length;
     for (let i = 0; i < n; i++) {
       const a = t.poly[i]!;
       const q = t.poly[(i + 1) % n]!;
+      const shopH = t.shopEdges.includes(i) ? t.shopH + (t.y0 - s.y0) : 0;
+      if (t.top) {
+        addFacet(B, a, q, t.top[i]!, t.top[(i + 1) % n]!, t.y0, t.y1, s.y0, shopH, H, code, f.accent);
+        continue;
+      }
       const len = Math.hypot(q[0] - a[0], q[1] - a[1]);
       if (len < 0.05) continue;
       const nx = (q[1] - a[1]) / len;
       const nz = -(q[0] - a[0]) / len;
       B.set('aF3', f.accent[0], f.accent[1], f.accent[2], len);
-      if (t.top) {
-        // sloped wall: the taper (along-edge inset per metre) lets corner lights follow the slope
-        const a2 = t.top[i]!;
-        const q2 = t.top[(i + 1) % n]!;
-        const insA = (a2[0] - a[0]) * (-nz) + (a2[1] - a[1]) * nx;
-        const insB = len - ((q2[0] - a[0]) * (-nz) + (q2[1] - a[1]) * nx);
-        B.set('aF4', 0, t.y1 - t.y0, (insA + insB) / 2 / Math.max(1e-3, t.y1 - t.y0), media);
-        addSlopedWall(B, a, q, a2, q2, t.y0, t.y1, nx, nz);
-      } else {
-        B.set('aF4', t.shopEdges.includes(i) ? t.shopH : 0, t.y1 - t.y0, 0, media);
-        addWall(B, a[0], a[1], q[0], q[1], t.y0, t.y1, nx, nz, t.y0);
-      }
+      B.set('aF4', shopH, H, 0, code);
+      B.set('aF5', 0, 0, 0, len);
+      addWall(B, a[0], a[1], q[0], q[1], t.y0, t.y1, nx, nz, s.y0);
     }
   }
 }
@@ -156,7 +355,7 @@ function addRoofs(b: Building, B: MeshBuilder): void {
     const cap = t.top ?? t.poly;
     const [cx, cz, half] = capFrame(cap);
     const bright = f.style === 'glass' || f.style === 'panel' ? 0.7 : 1.0;
-    if (half > 0.05) {
+    if (half > 0.05 && !t.seam) {
       B.set('aR', ROOF_CODE[t.roof] ?? 0, f.grime, f.seed, half);
       B.set('aRc', f.accent[0], f.accent[1], f.accent[2], f.strips);
       B.set('aRb', cx, cz, half, bright);
@@ -185,6 +384,7 @@ function addOutskirt(o: OutskirtBuilding, W: MeshBuilder, R: MeshBuilder): void 
     const len = Math.hypot(q[0] - a[0], q[1] - a[1]);
     W.set('aF3', o.accent[0], o.accent[1], o.accent[2], len);
     W.set('aF4', 0, o.h, 0, 0);
+    W.set('aF5', 0, 0, 0, len);
     addWall(W, a[0], a[1], q[0], q[1], 0, o.h, (q[1] - a[1]) / len, -(q[0] - a[0]) / len, 0);
   }
   const cx = (o.rect.x0 + o.rect.x1) / 2;
@@ -264,6 +464,23 @@ function convertKit(k: KitInstance): [KitGeom, LodClass, Inst] | null {
       return base('box', 'tiny', k.sx, k.sy, k.sz, CLS.foliage);
     case 'beacon':
       return base('beacon', 'big', k.sx * 2, k.sx * 2, k.sx * 2, CLS.concrete, { emit: k.emit, er: k.col[0], eg: k.col[1], eb: k.col[2], mode: 4 });
+    // ---- bolted-on detail (greebles.ts)
+    case 'pipeH':
+      return base('pipeH', k.sy > 0.6 ? 'big' : k.sy > 0.25 ? 'mid' : 'small', k.sx, k.sy, k.sy, (k.seed * 7) % 1 < 0.55 ? CLS.rust : CLS.metal);
+    case 'duct':
+      return base('box', k.sx > 3 ? 'mid' : 'small', k.sx, k.sy, k.sz, CLS.metal);
+    case 'module':
+    case 'pod': {
+      // window light: mostly warm, some cool, the odd tinted room; dark when emit is 0
+      const h = (k.seed * 13.7) % 1;
+      const wc: [number, number, number] = h < 0.6 ? [1, 0.66, 0.36] : h < 0.88 ? [0.7, 0.85, 1] : [0.8, 0.35, 1];
+      const big = Math.max(k.sx, k.sy, k.sz) > 7;
+      return base(k.kind, big ? 'mid' : 'small', k.sx, k.sy, k.sz, (k.seed * 3.1) % 1 < 0.5 ? CLS.painted : CLS.corrugated, { emit: k.emit, er: wc[0], eg: wc[1], eb: wc[2] });
+    }
+    case 'truss':
+      return base('truss', k.sy > 18 ? 'big' : 'mid', k.sx, k.sy, k.sz, CLS.metal);
+    case 'shaft':
+      return base('shaft', 'big', k.sx, k.sy, k.sz, (k.seed * 5.3) % 1 < 0.5 ? CLS.concrete : CLS.metal, { emit: k.emit, er: k.col[0] * 0.2 + 0.8, eg: k.col[1] * 0.2 + 0.8, eb: k.col[2] * 0.2 + 0.8 });
     default:
       return base('box', 'small', k.sx, k.sy, k.sz, CLS.concrete);
   }
@@ -301,6 +518,8 @@ export function buildCityRender(spec: CitySpec): CityRender {
   const bake = bakeLights({ ...spec, emitters }, 0.6);
   // signs, lamps, fires and festoons as local lights (and the halo candidates)
   const local = bakeLocalLights(spec, bake.rect);
+  // the height map the haze reads for light shafts
+  const skyMs = bakeSkymap(spec);
   U.cityRect.value.set(spec.bounds.x0, spec.bounds.z0, spec.bounds.x1, spec.bounds.z1);
 
   const chunks = new Chunks();
@@ -413,6 +632,8 @@ export function buildCityRender(spec: CitySpec): CityRender {
     m.frustumCulled = false;
     root.add(m);
   }
+  // the hive has no sea
+  if (spec.dials.world === 'hive') sea.visible = wall.visible = false;
 
   // ---- traffic and rain
   const traffic = new Traffic(spec.lanes);
@@ -466,7 +687,7 @@ export function buildCityRender(spec: CitySpec): CityRender {
     traffic,
     flyers,
     lights,
-    stats: { meshes, triangles, instances: kits.instanceCount, buildMs: performance.now() - t0, bakeMs: bake.ms + local.ms, localLights: local.lights },
+    stats: { meshes, triangles, instances: kits.instanceCount, buildMs: performance.now() - t0, bakeMs: bake.ms + local.ms + skyMs, localLights: local.lights },
     update(camera: THREE.Camera, dt: number): void {
       time += dt;
       camera.getWorldPosition(cam);

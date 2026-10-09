@@ -4,7 +4,7 @@
  * semantics (set once, applies to every following vertex) to keep the per-vertex
  * call cheap when generating a few hundred thousand vertices at startup.
  */
-import { BufferAttribute, BufferGeometry, Sphere, Vector3 } from 'three';
+import { BufferAttribute, BufferGeometry, InterleavedBuffer, InterleavedBufferAttribute, Sphere, Vector3 } from 'three';
 
 class Grow {
   data: Float32Array;
@@ -35,10 +35,16 @@ export class MeshBuilder {
   private readonly extraMap = new Map<string, Float32Array>();
   private readonly needsUV: boolean;
   private readonly needsNor: boolean;
+  private readonly interleave: boolean;
 
-  constructor(extras: Record<string, number> = {}, opts: { uv?: boolean; normals?: boolean } = {}) {
+  /**
+   * `interleave` packs the extra attributes into one vertex buffer: WebGPU allows only 8
+   * vertex buffers per draw, and position, normal and uv already take three.
+   */
+  constructor(extras: Record<string, number> = {}, opts: { uv?: boolean; normals?: boolean; interleave?: boolean } = {}) {
     this.needsUV = opts.uv ?? true;
     this.needsNor = opts.normals ?? true;
+    this.interleave = opts.interleave ?? false;
     for (const [name, size] of Object.entries(extras)) {
       const cur = new Float32Array(size);
       this.extras.push({ name, grow: new Grow(size), cur });
@@ -169,7 +175,23 @@ export class MeshBuilder {
     g.setAttribute('position', new BufferAttribute(this.pos.data.slice(0, n * 3), 3));
     if (this.needsNor) g.setAttribute('normal', new BufferAttribute(this.nor.data.slice(0, n * 3), 3));
     if (this.needsUV) g.setAttribute('uv', new BufferAttribute(this.uv.data.slice(0, n * 2), 2));
-    for (const e of this.extras) g.setAttribute(e.name, new BufferAttribute(e.grow.data.slice(0, n * e.grow.size), e.grow.size));
+    if (this.interleave && this.extras.length > 1) {
+      const stride = this.extras.reduce((a, e) => a + e.grow.size, 0);
+      const data = new Float32Array(n * stride);
+      let off = 0;
+      for (const e of this.extras) {
+        const sz = e.grow.size;
+        const src = e.grow.data;
+        for (let i = 0; i < n; i++) for (let k = 0; k < sz; k++) data[i * stride + off + k] = src[i * sz + k] as number;
+        off += sz;
+      }
+      const ib = new InterleavedBuffer(data, stride);
+      off = 0;
+      for (const e of this.extras) {
+        g.setAttribute(e.name, new InterleavedBufferAttribute(ib, e.grow.size, off));
+        off += e.grow.size;
+      }
+    } else for (const e of this.extras) g.setAttribute(e.name, new BufferAttribute(e.grow.data.slice(0, n * e.grow.size), e.grow.size));
     g.setIndex(new BufferAttribute(this.idx.slice(0, this.idxLen), 1));
     // bounding sphere from positions
     const v = new Vector3();
@@ -356,34 +378,6 @@ export function addRoofCap(b: MeshBuilder, poly: readonly [number, number][], y:
     if (down) b.tri(ic, ia, iq);
     else b.tri(ic, iq, ia);
   }
-}
-
-/**
- * Sloped wall between the bottom edge a->q at y0 and the top edge a2->q2 at y1
- * (a tapered or flared tier). uv stays metric: u along the bottom edge (so the top
- * corners land where they really are and windows keep their size), v = height
- * above y0. Returns the average along-edge inset per metre of height.
- */
-export function addSlopedWall(b: MeshBuilder, a: readonly [number, number], q: readonly [number, number], a2: readonly [number, number], q2: readonly [number, number], y0: number, y1: number, nx: number, nz: number): number {
-  const len = Math.hypot(q[0] - a[0], q[1] - a[1]) || 1;
-  const tx = (q[0] - a[0]) / len;
-  const tz = (q[1] - a[1]) / len;
-  const ua2 = (a2[0] - a[0]) * tx + (a2[1] - a[1]) * tz;
-  const uq2 = (q2[0] - a[0]) * tx + (q2[1] - a[1]) * tz;
-  // face normal from the slant: outward horizontal normal tilted by the inset
-  const h = y1 - y0;
-  const midIn = ((a2[0] + q2[0]) / 2 - (a[0] + q[0]) / 2) * nx + ((a2[1] + q2[1]) / 2 - (a[1] + q[1]) / 2) * nz;
-  const inward = -midIn;
-  const nl = Math.hypot(h, inward) || 1;
-  const fx = (nx * h) / nl;
-  const fy = inward / nl;
-  const fz = (nz * h) / nl;
-  const p0 = b.vert(q[0], y0, q[1], fx, fy, fz, len, 0);
-  const p1 = b.vert(a[0], y0, a[1], fx, fy, fz, 0, 0);
-  const p2 = b.vert(a2[0], y1, a2[1], fx, fy, fz, ua2, h);
-  const p3 = b.vert(q2[0], y1, q2[1], fx, fy, fz, uq2, h);
-  b.quad(p0, p1, p2, p3);
-  return h > 0 ? (ua2 + (len - uq2)) / 2 / h : 0;
 }
 
 /** Vertical wall quad along the polygon edge a->b (outward normal n), spanning y0..y1. uv = (metres along from a, y - yUv0). */
