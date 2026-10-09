@@ -46,7 +46,7 @@ import { MeshBuilder, addBox, addCylinder, addSphere } from './geometry';
 import { U, flicker, fogAtten, hash12, shade, vnoise } from './tsl';
 import { cellular, desat, fbmF, nightLightDir, shadeN, streakNoise } from './surface';
 
-export type KitGeom = 'box' | 'ac' | 'cyl' | 'tank' | 'dish' | 'fan' | 'lamp' | 'tree' | 'beacon' | 'cage' | 'container' | 'stack' | 'vent' | 'car';
+export type KitGeom = 'box' | 'ac' | 'cyl' | 'tank' | 'dish' | 'fan' | 'lamp' | 'tree' | 'beacon' | 'cage' | 'container' | 'stack' | 'vent' | 'car' | 'pipeH' | 'module' | 'pod' | 'truss' | 'shaft';
 
 /** Body classes for part 0 (encoded as the integer part of iC.w). */
 export const CLS = { concrete: 0, metal: 1, glass: 2, corrugated: 3, foliage: 4, painted: 5, grille: 6, rust: 7, lightbox: 8, stone: 9, gold: 10, water: 11 } as const;
@@ -201,6 +201,91 @@ function buildGeometries(): Record<KitGeom, THREE.BufferGeometry> {
     addBox(b, 0, 0.5, 0, 1, 1, 1, 0);
     out.container = b.build();
   }
+  // horizontal pipe or tank: unit radius, unit length along local x, centred on its axis
+  {
+    const b = mb();
+    part(b, PART.body);
+    const c = mb();
+    part(c, PART.body);
+    addCylinder(c, 0, -0.5, 0, 1, 1, 1, 12, true);
+    const g = c.build();
+    g.rotateZ(Math.PI / 2);
+    appendInto(b, g);
+    out.pipeH = b.build();
+  }
+  // bolted-on room: a box hung off a wall, a window band on its front (+z) and a sill
+  {
+    const b = mb();
+    part(b, PART.body);
+    addBox(b, 0, 0.5, 0, 1, 1, 1, 0);
+    addBox(b, 0, 0.36, 0.52, 0.86, 0.04, 0.06, 0);
+    part(b, PART.emit);
+    addBox(b, 0, 0.6, 0.505, 0.74, 0.36, 0.02, 0);
+    out.module = b.build();
+  }
+  // capsule: a box with one round window in its front (+z)
+  {
+    const b = mb();
+    part(b, PART.body);
+    addBox(b, 0, 0.5, 0, 1, 1, 1, 0);
+    const c = mb();
+    part(c, PART.emit);
+    addCylinder(c, 0, 0, 0, 0.27, 0.27, 0.03, 16, true);
+    const g = c.build();
+    g.rotateX(Math.PI / 2);
+    g.translate(0, 0.56, 0.5);
+    appendInto(b, g, PART.emit);
+    out.pod = b.build();
+  }
+  // lattice mast: four posts and cross braces in eight bays (unit footprint, unit height)
+  {
+    const b = mb();
+    part(b, PART.body);
+    const t = 0.07;
+    for (const [x, z] of [
+      [-0.5, -0.5],
+      [0.5, -0.5],
+      [0.5, 0.5],
+      [-0.5, 0.5],
+    ] as const)
+      addBox(b, x * (1 - t), 0.5, z * (1 - t), t, 1, t, 0);
+    const bays = 8;
+    for (let k = 0; k < bays; k++) {
+      const y0 = k / bays;
+      const y1 = (k + 1) / bays;
+      addBox(b, 0, y0, -0.5 + t / 2, 1, 0.012, t * 0.6, 0);
+      addBox(b, 0, y0, 0.5 - t / 2, 1, 0.012, t * 0.6, 0);
+      addBox(b, -0.5 + t / 2, y0, 0, t * 0.6, 0.012, 1, 0);
+      addBox(b, 0.5 - t / 2, y0, 0, t * 0.6, 0.012, 1, 0);
+      // one diagonal per face per bay, alternating
+      const ang = Math.atan2(y1 - y0, 1) * (k % 2 ? 1 : -1);
+      for (const [cx, cz, rot] of [
+        [0, -0.5 + t / 2, 0],
+        [0, 0.5 - t / 2, 0],
+        [-0.5 + t / 2, 0, Math.PI / 2],
+        [0.5 - t / 2, 0, Math.PI / 2],
+      ] as const) {
+        const d = mb();
+        part(d, PART.body);
+        addBox(d, 0, 0, 0, Math.hypot(1, y1 - y0), 0.012, t * 0.5, 0);
+        const g = d.build();
+        g.rotateZ(ang);
+        g.rotateY(rot);
+        g.translate(cx, (y0 + y1) / 2, cz);
+        appendInto(b, g);
+      }
+    }
+    out.truss = b.build();
+  }
+  // service shaft or glass lift bolted up a wall: a box with a lit strip down its front (+z)
+  {
+    const b = mb();
+    part(b, PART.body);
+    addBox(b, 0, 0.5, 0, 1, 1, 1, 0);
+    part(b, PART.emit);
+    addBox(b, 0, 0.5, 0.505, 0.34, 0.985, 0.02, 0);
+    out.shaft = b.build();
+  }
   // flying car, 4.6 m long, nose toward +z: hull, cabin, tail light bar, head lights, thruster pods
   {
     const b = mb();
@@ -214,9 +299,34 @@ function buildGeometries(): Record<KitGeom, THREE.BufferGeometry> {
     for (const sx of [-1, 1]) addCylinder(b, sx * 1.05, 0.08, -1.3, 0.22, 0.22, 0.05, 8, true);
     part(b, PART.head);
     for (const sx of [-1, 1]) addBox(b, sx * 0.62, 0.42, 2.36, 0.42, 0.1, 0.04, 0);
+    // bolted on, lopsided: a cargo pod on the roof's left, a tank slung on the right flank,
+    // a rack bar and a whip antenna
+    part(b, PART.body);
+    addBox(b, -0.35, 1.03, -0.7, 0.62, 0.32, 1.3, 0);
+    addBox(b, 0, 1.06, -1.6, 1.3, 0.05, 0.08, 0);
+    addCylinder(b, 0.06, 1.03, -2.0, 0.015, 0.008, 0.95, 4, false);
+    const tk = mb();
+    part(tk, PART.body);
+    addCylinder(tk, 0, 0, 0, 0.2, 0.2, 1.6, 8, true);
+    const tg = tk.build();
+    tg.rotateX(Math.PI / 2);
+    tg.translate(1.07, 0.45, -0.95);
+    appendInto(b, tg);
     out.car = b.build();
   }
   return out;
+}
+
+/** Append a built geometry into a builder (keeping its normals), tagging it with a part. */
+function appendInto(b: MeshBuilder, g: THREE.BufferGeometry, p = PART.body): void {
+  part(b, p);
+  const pos = g.getAttribute('position');
+  const nor = g.getAttribute('normal');
+  const uvA = g.getAttribute('uv');
+  const base = b.vertexCount;
+  for (let i = 0; i < pos.count; i++) b.vert(pos.getX(i), pos.getY(i), pos.getZ(i), nor.getX(i), nor.getY(i), nor.getZ(i), uvA ? uvA.getX(i) : 0, uvA ? uvA.getY(i) : 0);
+  const idx = g.getIndex();
+  for (let i = 0; i < idx.count; i += 3) b.tri(base + idx.getX(i), base + idx.getX(i + 1), base + idx.getX(i + 2));
 }
 
 let GEOMS: Record<KitGeom, THREE.BufferGeometry> | null = null;

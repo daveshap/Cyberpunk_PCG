@@ -12,7 +12,7 @@ import { addPointGlow, makeTubeBuilder } from './neon';
 import { U, fresnel, hash12, lightAt, shade, skyColor, vnoise } from './tsl';
 import { makeHaloMaterial } from './neonmats';
 
-const PART = { paint: 0, glass: 1, tail: 2, head: 3, thruster: 4, trim: 5 };
+const PART = { paint: 0, glass: 1, tail: 2, head: 3, thruster: 4, trim: 5, bolt: 6 };
 
 interface Station {
   z: number;
@@ -109,6 +109,53 @@ function buildHull(): THREE.BufferGeometry {
   // underglow pads
   B.set('aPart', PART.thruster);
   for (const sz of [-1.2, 1.0]) addBox(B, 0, 0.13, sz, 1.4, 0.03, 0.5, 0);
+  // ---- bolted on, and none of it symmetrical: an aux power pack strapped to the right
+  // flank with its hoses, a patch panel in mismatched primer on the left door, a conduit
+  // run along the left sill, a rack on the rear deck with a crate lashed to one side,
+  // a whip antenna and a spotlight
+  B.set('aPart', PART.bolt);
+  addBox(B, 1.24, 0.6, -0.55, 0.42, 0.46, 1.5, 0);
+  addBox(B, -1.115, 0.66, -0.25, 0.05, 0.46, 1.3, 0);
+  addBox(B, -0.42, 1.27, -2.05, 0.62, 0.3, 0.72, 0.08);
+  B.set('aPart', PART.trim);
+  addBox(B, 1.47, 0.62, -0.55, 0.05, 0.3, 1.1, 0);
+  for (const z of [-1.05, -0.05]) addBox(B, 1.24, 0.6, z, 0.47, 0.06, 0.06, 0);
+  for (const z of [-1.7, -2.4]) addBox(B, 0, 1.11, z, 1.6, 0.05, 0.06, 0);
+  for (const x of [-0.72, 0.72]) addBox(B, x, 1.11, -2.05, 0.05, 0.05, 0.8, 0);
+  const pipe = new MeshBuilder({ aPart: 1 });
+  pipe.set('aPart', PART.trim);
+  addCylinder(pipe, 0, 0, 0, 0.055, 0.055, 3.4, 8, true);
+  const pg = pipe.build();
+  pg.rotateX(Math.PI / 2);
+  pg.translate(-1.13, 0.34, -2.2);
+  appendGeo(B, pg, PART.trim);
+  const hose = new MeshBuilder({ aPart: 1 });
+  hose.set('aPart', PART.trim);
+  addCylinder(hose, 0, 0, 0, 0.04, 0.04, 0.5, 6, true);
+  for (const z of [-1.0, -0.15]) {
+    const hg = hose.build();
+    hg.rotateZ(Math.PI / 2 - 0.5);
+    hg.translate(1.0, 0.82, z);
+    appendGeo(B, hg, PART.trim);
+  }
+  const ant = new MeshBuilder({ aPart: 1 });
+  ant.set('aPart', PART.trim);
+  addCylinder(ant, 0, 0, 0, 0.018, 0.008, 1.1, 5, true);
+  const ag = ant.build();
+  ag.rotateX(-0.25);
+  ag.translate(-0.78, 1.0, -2.45);
+  appendGeo(B, ag, PART.trim);
+  B.set('aPart', PART.tail);
+  addBox(B, -0.78 + 0, 2.06, -2.73, 0.05, 0.05, 0.05, 0);
+  const lamp = new MeshBuilder({ aPart: 1 });
+  lamp.set('aPart', PART.trim);
+  addCylinder(lamp, 0, 0, 0, 0.11, 0.13, 0.26, 10, true);
+  const lg = lamp.build();
+  lg.rotateX(Math.PI / 2);
+  lg.translate(-0.92, 0.98, 1.45);
+  appendGeo(B, lg, PART.trim);
+  B.set('aPart', PART.head);
+  addBox(B, -0.92, 0.98, 1.72, 0.17, 0.17, 0.02, 0);
   const geo = B.build();
   geo.computeVertexNormals();
   return geo;
@@ -191,8 +238,13 @@ export class HoverCar {
       const isT = step(1.5, part).mul(step(part, 2.5));
       const isH = step(2.5, part).mul(step(part, 3.5));
       const isR = step(3.5, part).mul(step(part, 4.5));
-      const isK = step(4.5, part);
-      const col = body.add(rim).mul(isP).add(glass.mul(isG)).add(tail.mul(isT)).add(head.mul(isH)).add(thr.mul(isR)).add(trim.mul(isK));
+      const isK = step(4.5, part).mul(step(part, 5.5));
+      const isB = step(5.5, part);
+      // bolted-on parts: mismatched primer and old paint, scuffed and chipped to metal
+      const scuff = smoothstep(0.55, 0.8, vnoise(lp.xz.mul(14.0).add(lp.y.mul(9.0))));
+      const boltAlb = mix(vec3(0.13, 0.15, 0.12), vec3(0.22, 0.12, 0.05), step(0.0, lp.x)).mul(mix(0.8, 1.15, vnoise(lp.xz.mul(4.0)))).mul(oneMinus(grime.mul(0.3)));
+      const bolt = shade(mix(boltAlb, vec3(0.3, 0.3, 0.31), scuff.mul(0.6)), n, wp, float(0.15), float(0.7)).add(env.mul(F).mul(0.25));
+      const col = body.add(rim).mul(isP).add(glass.mul(isG)).add(tail.mul(isT)).add(head.mul(isH)).add(thr.mul(isR)).add(trim.mul(isK)).add(bolt.mul(isB));
       return vec4(col.mul(1.0), 1.0);
     })();
     const hull = new THREE.Mesh(buildHull(), m);
