@@ -93,6 +93,22 @@ const poses = await page.evaluate(() => {
   out.aerial = [b.x0 + (b.x1 - b.x0) * 0.15, 420, b.z1 + 200, -0.62, -0.32];
   out.skyline = [b.x0 - 300, 120, (b.z0 + b.z1) / 2, -Math.PI / 2, 0.03];
   out.top = [(b.x0 + b.x1) / 2, 1500, (b.z0 + b.z1) / 2 + 900, 0, -1.0];
+  // canyons (made for the hive, fine anywhere): down an arterial halfway up, straight up
+  // the walls to the slit of sky, and down into the depths; crowns: across the tower tops
+  {
+    const art = s.streets.filter((t) => t.kind === 'arterial' && t.hi - t.lo > 900).sort((p, q) => Math.abs(p.pos) - Math.abs(q.pos))[0];
+    if (art) {
+      const along = art.lo + (art.hi - art.lo) * 0.18;
+      const x = art.axis === 'x' ? along : art.pos;
+      const z = art.axis === 'x' ? art.pos : along;
+      const yaw = art.axis === 'x' ? -Math.PI / 2 : Math.PI;
+      out.canyon = [x, 300, z, yaw, 0.04];
+      out['canyon:up'] = [x, 240, z, yaw, 0.95];
+      out['canyon:down'] = [x, 760, z, yaw, -0.85];
+    }
+    const maxH = Math.max(...s.buildings.map((q) => q.height));
+    out.crowns = [b.x0 - 150, maxH * 0.9, (b.z0 + b.z1) / 2 + 350, -Math.PI / 2 + 0.3, -0.2];
+  }
   // harbour: out on the water looking north at the waterfront skyline (the classic
   // night skyline photo across a river or harbour); aimed at the tallest tower near the shore
   {
@@ -338,7 +354,7 @@ for (const raw of views) {
   await page.evaluate((n) => window.__game && window.__game.screenScene && window.__game.screenScene(n), scr);
   const dials = Object.fromEntries([...ex].map(([k, x]) => [k, Number(x)]));
   const restore = await page.evaluate((o) => (window.__game && window.__game.tune ? window.__game.tune(o) : {}), dials);
-  const file = path.join(outDir, `${raw.replace(/:/g, '-').replace('@', '_').replace(/=/g, '').replace(/&/g, '_')}.png`);
+  const file = path.join(outDir, `${raw.replace(/:/g, '-').replace(/\//g, '_').replace('@', '_').replace(/=/g, '').replace(/&/g, '_')}.png`);
   if (v.startsWith('fly:')) {
     // fly:<kind>:<i>[:back:side:up] rides along with a flyer
     const [, kind, idx, back, side, up] = v.split(':');
@@ -350,6 +366,31 @@ for (const raw of views) {
   } else if (v === 'spawn') {
     await page.evaluate(([n]) => window.__game.settle(n, window.__game.backend === 'WebGPU' ? 80 : 0), [frames]);
   } else {
+    // look:x/y/z/tx/ty/tz puts the camera at x,y,z looking at tx,ty,tz
+    if (v.startsWith('look:') && poses) {
+      const [x, y, z, tx, ty, tz] = v.slice(5).split('/').map(Number);
+      poses[v] = [x, y, z, Math.atan2(-(tx - x), -(tz - z)), Math.atan2(ty - y, Math.hypot(tx - x, tz - z))];
+    }
+    // see:<archetype>[:i[:dist[:azimuth[:lift]]]] frames the i-th tallest building of an
+    // archetype from a set direction (no occlusion test: try a few azimuths)
+    if (v.startsWith('see:') && poses) {
+      const [, arch, idx, dist, az, lift] = v.split(':');
+      poses[v] = await page.evaluate(
+        ([arch, i, dist, az, lift]) => {
+          const s = window.__game.spec;
+          const b = s.buildings.filter((x) => x.archetype === arch).sort((p, q) => q.height - p.height)[i];
+          if (!b) return null;
+          const cx = (b.rect.x0 + b.rect.x1) / 2;
+          const cz = (b.rect.z0 + b.rect.z1) / 2;
+          const d = dist > 0 ? dist : Math.max(120, b.height * 1.15);
+          const px = cx + Math.cos(az) * d;
+          const pz = cz + Math.sin(az) * d;
+          const py = Math.max(20, b.height * lift);
+          return [px, py, pz, Math.atan2(-(cx - px), -(cz - pz)), Math.atan2(b.height * 0.5 - py, d)];
+        },
+        [arch, Number(idx ?? 0), Number(dist ?? 0), Number(az ?? 0.6), Number(lift ?? 0.45)],
+      );
+    }
     if (!poses || !poses[v]) {
       console.log('unknown view', v);
       continue;
