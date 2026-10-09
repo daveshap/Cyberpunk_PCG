@@ -65,7 +65,7 @@ export const PROFILES: Record<DistrictKind, DistrictProfile> = {
     lot: [48, 84],
     coverage: 0.58,
     streets: { spacing: [118, 150], road: 16, walk: 6, alley: 0 },
-    archetypes: { tower: 0.4, monolith: 0.2, needle: 0.08, podium: 0.16, taper: 0.09, cantilever: 0.08, twist: 0.08, disc: 0.05, flare: 0.05, arch: 0.05, pyramid: 0.025 },
+    archetypes: { tower: 0.22, monolith: 0.12, needle: 0.05, podium: 0.12, taper: 0.05, cantilever: 0.05, twist: 0.04, disc: 0.04, flare: 0.04, arch: 0.04, pyramid: 0.02, egg: 0.09, prism: 0.09, helix: 0.08, bundle: 0.07, lean: 0.05, skyship: 0.04 },
     style: { grime: 0.1, edge: 0.85, flash: 0.45, luxury: 0.55 },
     culture: { us: 0.6, jp: 0.25, cn: 0.15 },
     palette: [0xdde8ff, 0x2ec5ff, 0xff3355, 0x8a7cff],
@@ -89,7 +89,7 @@ export const PROFILES: Record<DistrictKind, DistrictProfile> = {
     lot: [6, 15],
     coverage: 0.95,
     streets: { spacing: [38, 58], road: 8, walk: 2.4, alley: 0.55 },
-    archetypes: { shophouse: 0.56, midrise: 0.34, spire: 0.05, cantilever: 0.03, twist: 0.02 },
+    archetypes: { shophouse: 0.52, midrise: 0.3, spire: 0.04, cantilever: 0.03, twist: 0.02, stack: 0.07 },
     style: { grime: 0.35, edge: 0.4, flash: 0.95, luxury: 0.3 },
     culture: { us: 0.12, jp: 0.8, cn: 0.08 },
     palette: [0xff3fa4, 0x2fd8ff, 0xf4f6ff, 0xffb347],
@@ -113,7 +113,7 @@ export const PROFILES: Record<DistrictKind, DistrictProfile> = {
     lot: [5, 13],
     coverage: 0.97,
     streets: { spacing: [34, 54], road: 8, walk: 2.0, alley: 0.65 },
-    archetypes: { shophouse: 0.42, midrise: 0.54, ziggurat: 0.03, stilts: 0.02 },
+    archetypes: { shophouse: 0.4, midrise: 0.48, ziggurat: 0.03, stilts: 0.02, stack: 0.09 },
     style: { grime: 0.6, edge: 0.32, flash: 0.85, luxury: 0.15 },
     culture: { us: 0.1, jp: 0.1, cn: 0.8 },
     palette: [0xff2a2a, 0xffc83d, 0x22e3a0, 0x3d6bff],
@@ -137,7 +137,7 @@ export const PROFILES: Record<DistrictKind, DistrictProfile> = {
     lot: [62, 140],
     coverage: 0.55,
     streets: { spacing: [130, 170], road: 12, walk: 4, alley: 0.1 },
-    archetypes: { megablock: 0.56, midrise: 0.16, arcology: 0.1, ziggurat: 0.1, stilts: 0.1, cantilever: 0.05, pyramid: 0.025 },
+    archetypes: { megablock: 0.46, midrise: 0.12, arcology: 0.08, ziggurat: 0.08, stilts: 0.08, cantilever: 0.04, pyramid: 0.02, stack: 0.12, lean: 0.06, bundle: 0.04, skyship: 0.03 },
     style: { grime: 0.55, edge: 0.6, flash: 0.4, luxury: 0.12 },
     culture: { us: 0.5, jp: 0.2, cn: 0.3 },
     palette: [0xff9e3d, 0xcff5d8, 0x6f8cff, 0xff4fa0],
@@ -185,7 +185,7 @@ export const PROFILES: Record<DistrictKind, DistrictProfile> = {
     lot: [14, 46],
     coverage: 0.66,
     streets: { spacing: [55, 92], road: 9, walk: 2, alley: 0.3 },
-    archetypes: { ruin: 0.44, shack: 0.3, midrise: 0.22, stilts: 0.03, ziggurat: 0.02 },
+    archetypes: { ruin: 0.4, shack: 0.28, midrise: 0.2, stilts: 0.03, ziggurat: 0.02, stack: 0.07 },
     style: { grime: 0.95, edge: 0.42, flash: 0.15, luxury: 0.0 },
     culture: { us: 0.72, jp: 0.12, cn: 0.16 },
     palette: [0xff6a1f, 0xb87333, 0x9acd32, 0xc0306a],
@@ -209,7 +209,7 @@ export const PROFILES: Record<DistrictKind, DistrictProfile> = {
     lot: [30, 70],
     coverage: 0.32,
     streets: { spacing: [110, 150], road: 10, walk: 5, alley: 0 },
-    archetypes: { villa: 0.46, spire: 0.36, cantilever: 0.12, disc: 0.07, twist: 0.05 },
+    archetypes: { villa: 0.46, spire: 0.3, cantilever: 0.1, disc: 0.07, twist: 0.03, egg: 0.06, helix: 0.06, skyship: 0.05 },
     style: { grime: 0.04, edge: 0.3, flash: 0.25, luxury: 0.95 },
     culture: { us: 0.6, jp: 0.32, cn: 0.08 },
     palette: [0xffd8a8, 0xe8c068, 0x5fe0d0, 0xb9a2ff],
@@ -242,6 +242,7 @@ const neutralTunes = (): Record<DistrictKind, DistrictTune> =>
   Object.fromEntries(KINDS.map((k) => [k, { ...NEUTRAL_TUNE }])) as Record<DistrictKind, DistrictTune>;
 
 export const DEFAULT_DIALS: Dials = {
+  world: 'city',
   grime: 0,
   edge: 0,
   flash: 0,
@@ -290,6 +291,7 @@ export function resolveDials(d: DialsInput | undefined): Dials {
   out.height = clamp(out.height, 0.5, 1.8);
   out.size = clamp(out.size, 1.6, 3.6);
   out.alien = clamp(Number(out.alien ?? 0.5), 0, 1);
+  out.world = out.world === 'hive' ? 'hive' : 'city';
   for (const k of Object.keys(out.mix) as DistrictKind[]) out.mix[k] = clamp(out.mix[k], 0, 2);
   return out;
 }

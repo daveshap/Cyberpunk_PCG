@@ -4,183 +4,14 @@
  * (extruded footprints with a facade description and a roof kind) and a few
  * structural features (pagoda roofs, open frames, skybridges, sawtooth roofs).
  */
-import type { Archetype, Building, District, DistrictKind, DistrictTune, Facade, FacadeStyle, LandUse, Lot, RGB, Rect, RoofKind, Structure, Style, Tier, Vec2 } from './types';
+import type { Archetype, Building, District, DistrictKind, DistrictTune, FacadeStyle, LandUse, Lot, RGB, Rect, Structure, Style, Tier, Vec2 } from './types';
 import type { Zoning } from './zoning';
 import { blendAt } from './zoning';
 import { PROFILES, STYLE_PALETTES, blendStyle, dominantCulture, hexToLinear, lightColor, tuneMul } from './profiles';
 import { chamferRect, regularPoly } from './geom2d';
 import { Rng, clamp, lerp } from './rng';
-
-interface Ctx {
-  r: Rng;
-  style: Style;
-  tune: DistrictTune;
-  use: LandUse;
-  wall: RGB;
-  palette: RGB[];
-  hmul: number;
-  structures: Structure[];
-  seed: number;
-  /** Set when a builder hands the lot to another archetype (the building records what was built). */
-  built?: Archetype;
-}
-
-const FLOOR_H: Record<FacadeStyle, number> = { glass: 4.0, panel: 4.2, grid: 3.3, shop: 3.4, balcony: 3.0, metal: 6.0, raw: 3.2, lux: 3.8 };
-const BAY_W: Record<FacadeStyle, [number, number]> = {
-  glass: [1.4, 2.0],
-  panel: [2.6, 4.2],
-  grid: [2.4, 3.4],
-  shop: [2.6, 4.0],
-  balcony: [3.0, 4.2],
-  metal: [4.0, 7.0],
-  raw: [2.8, 3.8],
-  lux: [2.2, 3.2],
-};
-
-function rectPoly(r: Rect): Vec2[] {
-  return [
-    [r.x0, r.z0],
-    [r.x1, r.z0],
-    [r.x1, r.z1],
-    [r.x0, r.z1],
-  ];
-}
-
-function inset(r: Rect, d: number): Rect {
-  return { x0: r.x0 + d, x1: r.x1 - d, z0: r.z0 + d, z1: r.z1 - d };
-}
-
-function insetSides(r: Rect, l: number, rr: number, t: number, b: number): Rect {
-  return { x0: r.x0 + l, x1: r.x1 - rr, z0: r.z0 + t, z1: r.z1 - b };
-}
-
-function ok(r: Rect, min = 3): boolean {
-  return r.x1 - r.x0 >= min && r.z1 - r.z0 >= min;
-}
-
-function rw(r: Rect): number {
-  return r.x1 - r.x0;
-}
-function rd(r: Rect): number {
-  return r.z1 - r.z0;
-}
-
-/** Edges of `poly` that face a street side of the lot (within `maxDist` of it). */
-function frontEdges(poly: readonly Vec2[], lot: Lot, maxDist: number): number[] {
-  const out: number[] = [];
-  const R = lot.rect;
-  for (let i = 0; i < poly.length; i++) {
-    const a = poly[i] as Vec2;
-    const b = poly[(i + 1) % poly.length] as Vec2;
-    const dx = b[0] - a[0];
-    const dz = b[1] - a[1];
-    const len = Math.hypot(dx, dz);
-    if (len < 2) continue;
-    const nx = dz / len;
-    const nz = -dx / len;
-    const mx = (a[0] + b[0]) / 2;
-    const mz = (a[1] + b[1]) / 2;
-    if (nx < -0.7 && lot.front[0] && mx - R.x0 < maxDist) out.push(i);
-    else if (nx > 0.7 && lot.front[1] && R.x1 - mx < maxDist) out.push(i);
-    else if (nz < -0.7 && lot.front[2] && mz - R.z0 < maxDist) out.push(i);
-    else if (nz > 0.7 && lot.front[3] && R.z1 - mz < maxDist) out.push(i);
-  }
-  return out;
-}
-
-function mix3(a: RGB, b: RGB, t: number): RGB {
-  return [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-}
-
-function makeFacade(c: Ctx, style: FacadeStyle, o: Partial<Facade> = {}): Facade {
-  const r = c.r;
-  const s = c.style;
-  const fh = FLOOR_H[style] * r.range(0.94, 1.08);
-  const [b0, b1] = BAY_W[style];
-  let lit = 0.45;
-  let warm = 0.6;
-  switch (style) {
-    case 'glass':
-      lit = 0.55;
-      warm = 0.22;
-      break;
-    case 'panel':
-      lit = 0.35;
-      warm = 0.15;
-      break;
-    case 'grid':
-      lit = 0.48;
-      warm = 0.62;
-      break;
-    case 'shop':
-      lit = 0.6;
-      warm = 0.65;
-      break;
-    case 'balcony':
-      lit = 0.46;
-      warm = 0.72;
-      break;
-    case 'metal':
-      lit = 0.16;
-      warm = 0.5;
-      break;
-    case 'raw':
-      lit = 0.12;
-      warm = 0.7;
-      break;
-    case 'lux':
-      lit = 0.42;
-      warm = 0.92;
-      break;
-  }
-  lit *= (1 - 0.65 * s.grime * s.grime) * (0.8 + 0.4 * s.flash);
-  // a well-funded district keeps its lights on; a decaying one has empty floors
-  lit *= clamp(1 + 0.3 * c.tune.budget - 0.35 * Math.max(0, c.tune.decay), 0.3, 1.5);
-  // land use: homes glow warm, offices cool, nightlife blazes, civic stays lit
-  if (c.use === 'residential') {
-    if ((style === 'glass' || style === 'panel') && !o.style && r.chance(0.55)) style = s.luxury > 0.6 ? 'lux' : 'balcony';
-    warm += 0.3;
-  } else if (c.use === 'commercial') warm -= 0.15;
-  else if (c.use === 'nightlife') lit *= 1.25;
-  else if (c.use === 'civic') lit = Math.max(lit, 0.6);
-  warm = clamp(warm - 0.3 * s.edge + 0.25 * s.luxury + r.range(-0.12, 0.12), 0, 1);
-  let base = c.wall;
-  if (style === 'glass') base = mix3([0.03, 0.045, 0.06], base, 0.3);
-  if (style === 'panel') base = mix3(base, [0.02, 0.022, 0.028], 0.55 + 0.3 * s.edge);
-  if (style === 'lux') base = mix3(base, [0.4, 0.34, 0.26], 0.35 * s.luxury);
-  const accent = (c.palette[r.int(c.palette.length)] ?? [1, 1, 1]) as RGB;
-  let strips = clamp((style === 'glass' || style === 'panel' ? 0.55 * s.edge : 0.15 * s.edge) + 0.35 * s.flash * (style === 'shop' ? 0.2 : 1) + r.range(-0.15, 0.15), 0, 1);
-  if (c.use === 'nightlife') strips = Math.max(strips, r.range(0.55, 0.9));
-  else if (c.use === 'residential') strips *= 0.4;
-  else if (c.use === 'civic') strips = Math.max(strips, 0.45);
-  return {
-    style,
-    floorH: fh,
-    bayW: r.range(b0, b1),
-    win: style === 'glass' ? r.range(0.82, 0.94) : style === 'panel' ? r.range(0.12, 0.3) : style === 'metal' ? r.range(0.1, 0.25) : r.range(0.42, 0.7),
-    lit: clamp(lit * r.range(0.75, 1.25), 0.02, 0.95),
-    warm,
-    base,
-    accent,
-    strips,
-    grime: clamp(s.grime + r.range(-0.12, 0.12), 0, 1),
-    seed: r.next(),
-    ...o,
-  };
-}
-
-function tier(poly: Vec2[], y0: number, y1: number, facade: Facade, roof: RoofKind, grounded: boolean, shopEdges: number[] = [], shopH = 0): Tier {
-  return { poly, y0, y1, facade, roof, grounded, shopEdges, shopH };
-}
-
-function pickHeight(c: Ctx, range: [number, number], skew = 1.6): number {
-  const t = Math.pow(c.r.next(), skew);
-  return lerp(range[0], range[1], t) * c.hmul;
-}
-
-function snapFloors(h: number, fh: number): number {
-  return Math.max(fh, Math.round(h / fh) * fh);
-}
+import { FORMS, type Former } from './forms';
+import { type Ctx, frontEdges, inset, insetSides, makeFacade, offsetConvex, ok, over, pickHeight, rectPoly, rd, rw, snapFloors, squarePoly, tapered, tier } from './massingkit';
 
 // ------------------------------------------------------------------ archetypes
 
@@ -205,19 +36,26 @@ const tower: Builder = (lot, c, out, prof) => {
   const fac = makeFacade(c, glassy ? 'glass' : 'panel');
   const chamfer = s.luxury > 0.5 && r.chance(0.5) ? Math.min(rw(cur), rd(cur)) * r.range(0.12, 0.28) : s.edge < 0.6 && r.chance(0.35) ? Math.min(rw(cur), rd(cur)) * 0.1 : 0;
   const steps = H > 160 ? r.intRange(1, 3) : r.intRange(0, 1);
+  // a separate stream, so the existing towers' other choices stay put
+  const asym = c.r.fork('asym').chance(0.65);
   let y = podH;
   for (let k = 0; k <= steps; k++) {
     const top = k === steps ? H : y + (H - y) * r.range(0.45, 0.7);
     const poly = chamfer > 0.5 ? chamferRect(cur, chamfer, [true, true, true, true]) : rectPoly(cur);
     out.push(tier(poly, y, top, { ...fac, seed: fac.seed + k * 0.13 }, k === steps ? (s.edge > 0.6 && r.chance(0.6) ? 'helipad' : 'crown') : 'flat', false));
     y = top;
-    const next = inset(cur, r.range(2.5, Math.min(8, Math.min(rw(cur), rd(cur)) * 0.18)));
+    // setbacks are rarely even: most towers step back on one or two sides only, so the
+    // silhouette leans and the crown sits off-centre
+    const mx = Math.min(8, Math.min(rw(cur), rd(cur)) * 0.18);
+    const side = (): number => (r.chance(0.4) ? 0.3 : r.range(2.5, mx) * (r.chance(0.3) ? 1.8 : 1));
+    const next = asym ? insetSides(cur, side(), side(), side(), side()) : inset(cur, r.range(2.5, mx));
     if (!ok(next, 10)) break;
     cur = next;
   }
-  // crown block
+  // crown block, pushed toward one side on asymmetric towers
   if (r.chance(0.55)) {
-    const cr = inset(cur, Math.min(rw(cur), rd(cur)) * r.range(0.15, 0.3));
+    const k = Math.min(rw(cur), rd(cur)) * r.range(0.15, 0.3);
+    const cr = asym ? insetSides(cur, k * r.range(0, 2), k * r.range(0, 2), k * r.range(0, 2), k * r.range(0, 2)) : inset(cur, k);
     if (ok(cr, 6)) out.push(tier(rectPoly(cr), y, y + r.range(8, 22), makeFacade(c, 'panel', { strips: clamp(0.5 + s.edge * 0.5, 0, 1) }), 'crown', false));
   }
 };
@@ -323,7 +161,8 @@ const megablock: Builder = (lot, c, out, prof) => {
   if (r.chance(prof.spike.p)) H = r.range(prof.spike.h[0], prof.spike.h[1]) * c.hmul;
   const fac = makeFacade(c, 'balcony');
   const shopH = 6;
-  const depth = r.range(18, 28);
+  // hive slabs run a kilometre up: deeper, or they read as sheets
+  const depth = r.range(18, 28) * (c.hive ? 2.3 : 1);
   const alongX = rw(L) >= rd(L);
   const variant = r.int(3);
   const slabs: Rect[] = [];
@@ -509,42 +348,6 @@ const spire: Builder = (lot, c, out) => {
 // carry a `top` polygon (same vertex order as `poly`); tiers that overhang what
 // is below them set `under` so the renderer draws a lit soffit.
 
-/** Uniform inward offset of a convex counter-clockwise polygon (negative d grows it). */
-export function offsetConvex(p: readonly Vec2[], d: number): Vec2[] {
-  const n = p.length;
-  const out: Vec2[] = [];
-  const nrm = (a: Vec2, b: Vec2): Vec2 => {
-    const dx = b[0] - a[0];
-    const dz = b[1] - a[1];
-    const l = Math.hypot(dx, dz) || 1;
-    return [dz / l, -dx / l];
-  };
-  for (let i = 0; i < n; i++) {
-    const a = p[(i + n - 1) % n] as Vec2;
-    const b = p[i] as Vec2;
-    const c = p[(i + 1) % n] as Vec2;
-    const n1 = nrm(a, b);
-    const n2 = nrm(b, c);
-    const c1 = n1[0] * a[0] + n1[1] * a[1] - d;
-    const c2 = n2[0] * b[0] + n2[1] * b[1] - d;
-    const det = n1[0] * n2[1] - n1[1] * n2[0];
-    if (Math.abs(det) < 1e-9) out.push([b[0] - n1[0] * d, b[1] - n1[1] * d]);
-    else out.push([(c1 * n2[1] - c2 * n1[1]) / det, (n1[0] * c2 - n2[0] * c1) / det]);
-  }
-  return out;
-}
-
-function squarePoly(cx: number, cz: number, half: number, rot = 0): Vec2[] {
-  return regularPoly(cx, cz, half * Math.SQRT2, 4, Math.PI / 4 + rot);
-}
-
-function tapered(poly: Vec2[], top: Vec2[], y0: number, y1: number, facade: Facade, roof: RoofKind, under = false): Tier {
-  const t = tier(poly, y0, y1, facade, roof, false);
-  t.top = top;
-  if (under) t.under = true;
-  return t;
-}
-
 /** Plain fallback when a lot cannot hold the megastructure: a tower where the district is tall, else a midrise. */
 const fallback: Builder = (lot, c, out, prof) => swap(prof.height[1] * c.hmul > 90 ? 'tower' : 'midrise', c)(lot, c, out, prof);
 
@@ -552,11 +355,6 @@ const fallback: Builder = (lot, c, out, prof) => swap(prof.height[1] * c.hmul > 
 function swap(a: Archetype, c: Ctx): Builder {
   c.built = a;
   return BUILDERS[a];
-}
-
-function over(t: Tier): Tier {
-  t.under = true;
-  return t;
 }
 
 /**
@@ -571,7 +369,7 @@ const pyramid: Builder = (lot, c, out, prof) => {
   const cx = (R.x0 + R.x1) / 2;
   const cz = (R.z0 + R.z1) / 2;
   const half = side / 2;
-  const H = lot.landmark ? clamp(side * r.range(1.45, 1.75), 360, 620) : clamp(side * r.range(1.2, 1.7), 110, 270) * c.hmul;
+  const H = lot.landmark ? (c.hive ? clamp(side * r.range(2.6, 3.4), 950, 1700) : clamp(side * r.range(1.45, 1.75), 360, 620)) : clamp(side * r.range(1.2, 1.7), 110, 270) * c.hmul;
   const podH = snapFloors(r.range(10, 16), 4.5);
   const pod = squarePoly(cx, cz, half);
   out.push(tier(pod, 0, podH, makeFacade(c, 'glass', { lit: 0.85, warm: 0.3 }), 'flat', true, frontEdges(pod, lot, 20), podH));
@@ -799,9 +597,51 @@ const stilts: Builder = (lot, c, out, prof) => {
   out.push(over(tier(rectPoly(R), y0, H, makeFacade(c, r.chance(0.6) ? 'balcony' : 'grid'), r.chance(0.4) ? 'garden' : 'flat', false)));
 };
 
-const BUILDERS: Record<Archetype, Builder> = { tower, monolith, needle, podium, shophouse, midrise, megablock, shed, tankfarm, ruin, shack, villa, spire, arcology, pyramid, ziggurat, taper, cantilever, twist, disc, flare, arch, stilts };
+/** A shaped tower (forms.ts), falling back to a plain one when the lot cannot hold it. */
+function shaped(f: Former): Builder {
+  return (lot, c, out, prof) => {
+    if (!f(lot, c, out, prof)) {
+      out.length = 0;
+      fallback(lot, c, out, prof);
+    }
+  };
+}
 
-const PREMIUM: ReadonlySet<Archetype> = new Set(['tower', 'monolith', 'needle', 'podium', 'spire', 'villa', 'arcology', 'pyramid', 'taper', 'cantilever', 'twist', 'disc', 'flare', 'arch']);
+const BUILDERS: Record<Archetype, Builder> = {
+  tower,
+  monolith,
+  needle,
+  podium,
+  shophouse,
+  midrise,
+  megablock,
+  shed,
+  tankfarm,
+  ruin,
+  shack,
+  villa,
+  spire,
+  arcology,
+  pyramid,
+  ziggurat,
+  taper,
+  cantilever,
+  twist,
+  disc,
+  flare,
+  arch,
+  stilts,
+  egg: shaped(FORMS.egg),
+  prism: shaped(FORMS.prism),
+  helix: shaped(FORMS.helix),
+  lean: shaped(FORMS.lean),
+  stack: shaped(FORMS.stack),
+  bundle: shaped(FORMS.bundle),
+  skyship: shaped(FORMS.skyship),
+  hulk: shaped(FORMS.hulk),
+};
+
+const PREMIUM: ReadonlySet<Archetype> = new Set(['tower', 'monolith', 'needle', 'podium', 'spire', 'villa', 'arcology', 'pyramid', 'taper', 'cantilever', 'twist', 'disc', 'flare', 'arch', 'egg', 'prism', 'helix', 'bundle', 'lean', 'skyship']);
 const DERELICT: ReadonlySet<Archetype> = new Set(['ruin', 'shack']);
 
 /** Archetype multipliers per land use (archetypes not listed keep 1, or `rest`). */
@@ -819,6 +659,8 @@ const BORROWED: Partial<Record<Archetype, DistrictKind>> = { shed: 'industrial',
 
 /** Megastructure archetypes, scaled by the alien dial. */
 const ALIEN: ReadonlySet<Archetype> = new Set(['pyramid', 'ziggurat', 'taper', 'cantilever', 'twist', 'disc', 'flare', 'arch', 'stilts']);
+/** Shaped towers: ordinary architecture of the future, nudged (more gently) by the alien dial too. */
+const SHAPED: ReadonlySet<Archetype> = new Set(['egg', 'prism', 'helix', 'lean', 'stack', 'bundle', 'skyship', 'hulk']);
 
 /** Smallest lot (short side, long side) each megastructure needs; smaller lots never pick it. */
 const FITS: Partial<Record<Archetype, [number, number]>> = {
@@ -831,18 +673,63 @@ const FITS: Partial<Record<Archetype, [number, number]>> = {
   flare: [36, 36],
   arch: [30, 72],
   stilts: [38, 38],
+  egg: [30, 30],
+  prism: [32, 32],
+  helix: [30, 30],
+  lean: [28, 40],
+  stack: [22, 22],
+  bundle: [36, 36],
+  skyship: [36, 90],
+  hulk: [48, 48],
 };
 
 /** What a megastructure lot (a whole block) becomes, per district kind. */
 const MEGA_W: Record<DistrictKind, Partial<Record<Archetype, number>>> = {
-  corporate: { pyramid: 0.8, taper: 1.2, twist: 1.2, cantilever: 1.0, disc: 0.8, flare: 0.8, arch: 0.9 },
-  megablock: { ziggurat: 1.5, stilts: 1.2, arch: 1.0, cantilever: 0.7, disc: 0.4 },
-  luxury: { cantilever: 1.2, disc: 1.2, twist: 0.8, taper: 0.6, flare: 0.5 },
-  jpmarket: { ziggurat: 1.0, stilts: 0.8, cantilever: 0.6 },
-  cnmarket: { ziggurat: 1.0, stilts: 1.0, cantilever: 0.5 },
-  industrial: { stilts: 1.0, arch: 0.6, ziggurat: 0.4 },
-  decayed: { ziggurat: 0.6, stilts: 0.6 },
+  corporate: { pyramid: 0.6, taper: 0.8, twist: 0.8, cantilever: 0.7, disc: 0.6, flare: 0.6, arch: 0.7, egg: 1.1, prism: 1.1, helix: 1.0, bundle: 0.9, skyship: 0.9, lean: 0.6 },
+  megablock: { ziggurat: 1.2, stilts: 1.0, arch: 0.8, cantilever: 0.6, disc: 0.3, stack: 1.3, lean: 0.8, bundle: 0.6, skyship: 0.7, hulk: 1.0 },
+  luxury: { cantilever: 1.0, disc: 1.0, twist: 0.6, taper: 0.5, flare: 0.4, egg: 1.0, helix: 1.0, skyship: 1.0 },
+  jpmarket: { ziggurat: 0.8, stilts: 0.6, cantilever: 0.5, stack: 1.2 },
+  cnmarket: { ziggurat: 0.8, stilts: 0.8, cantilever: 0.4, stack: 1.3, hulk: 0.6 },
+  industrial: { stilts: 1.0, arch: 0.6, ziggurat: 0.4, stack: 0.5 },
+  decayed: { ziggurat: 0.5, stilts: 0.5, stack: 1.0, hulk: 0.6 },
 };
+
+/**
+ * The hive: what a whole block becomes, per district kind. Kilometre towers want plain
+ * strong shapes (monoliths, bundles, folds, slabs, lumpy stacks); nothing small.
+ */
+const HIVE_W: Record<DistrictKind, Partial<Record<Archetype, number>>> = {
+  corporate: { monolith: 0.8, tower: 0.6, prism: 1.2, egg: 0.5, helix: 1.0, bundle: 1.2, taper: 0.6, skyship: 0.4, arch: 0.3, flare: 0.3, hulk: 0.6 },
+  megablock: { megablock: 0.8, stack: 1.2, bundle: 0.9, ziggurat: 0.7, lean: 0.7, arcology: 0.5, stilts: 0.4, skyship: 0.4, hulk: 1.4 },
+  jpmarket: { stack: 1.3, bundle: 0.7, megablock: 0.5, tower: 0.5, ziggurat: 0.4, helix: 0.3, hulk: 1.0 },
+  cnmarket: { stack: 1.4, megablock: 0.7, bundle: 0.6, ziggurat: 0.5, tower: 0.3, lean: 0.3, hulk: 1.2 },
+  luxury: { egg: 1.2, helix: 1.0, skyship: 0.8, disc: 0.6, cantilever: 0.5, prism: 0.4 },
+  industrial: { bundle: 1.0, stack: 0.9, monolith: 0.7, megablock: 0.5, stilts: 0.5, hulk: 1.0 },
+  decayed: { stack: 1.3, ziggurat: 0.7, megablock: 0.7, lean: 0.4, hulk: 1.2 },
+};
+
+/** Hive heights per district kind (m), with the odd spike. */
+export const HIVE_H: Record<DistrictKind, { h: [number, number]; spike: { p: number; h: [number, number] } }> = {
+  corporate: { h: [900, 2300], spike: { p: 0.14, h: [2400, 3100] } },
+  megablock: { h: [600, 1550], spike: { p: 0.1, h: [1600, 2100] } },
+  jpmarket: { h: [380, 1000], spike: { p: 0.08, h: [1050, 1400] } },
+  cnmarket: { h: [420, 1100], spike: { p: 0.08, h: [1150, 1500] } },
+  luxury: { h: [650, 1650], spike: { p: 0.1, h: [1700, 2200] } },
+  industrial: { h: [320, 850], spike: { p: 0.05, h: [900, 1200] } },
+  decayed: { h: [360, 1050], spike: { p: 0.06, h: [1100, 1400] } },
+};
+
+function pickHive(r: Rng, kind: DistrictKind, lot: Rect): Archetype {
+  const short = Math.min(rw(lot), rd(lot));
+  const long = Math.max(rw(lot), rd(lot));
+  const table = HIVE_W[kind];
+  const keys = (Object.keys(table) as Archetype[]).filter((k) => {
+    const fit = FITS[k];
+    return !fit || (short >= fit[0] && long >= fit[1]);
+  });
+  if (keys.length === 0) return 'tower';
+  return r.weighted(keys, keys.map((k) => table[k] ?? 0));
+}
 
 function pickMega(r: Rng, kind: DistrictKind, lot: Rect, s: Style): Archetype | null {
   const short = Math.min(rw(lot), rd(lot));
@@ -878,6 +765,8 @@ function pickArchetype(r: Rng, base: Partial<Record<Archetype, number>>, s: Styl
     let v = weights[k] ?? 0;
     if (PREMIUM.has(k)) v *= tuneMul(tn.budget, 2.2);
     if (ALIEN.has(k)) v *= Math.pow(alien * 2, 1.4);
+    if (SHAPED.has(k)) v *= 0.35 + 1.3 * alien;
+    if (k === 'stack') v *= 0.5 + 1.0 * s.grime + 0.5 * s.cn;
     const fit = FITS[k];
     if (fit && (short < fit[0] || long < fit[1])) v = 0;
     if (DERELICT.has(k)) v *= tuneMul(-tn.budget, 2.0);
@@ -913,6 +802,7 @@ function buildingPalette(r: Rng, district: District, s: Style): RGB[] {
 }
 
 export function makeBuildings(z: Zoning, lots: readonly Lot[], rng: Rng, hmul: number, structures: Structure[], alien = 0.5): Building[] {
+  const hive = z.hive;
   const out: Building[] = [];
   for (const lot of lots) {
     const r = rng.fork('b' + lot.key);
@@ -930,8 +820,10 @@ export function makeBuildings(z: Zoning, lots: readonly Lot[], rng: Rng, hmul: n
     style = { ...style, grime: j(style.grime), edge: j(style.edge), flash: j(style.flash), luxury: j(style.luxury) };
     const tune = src.tune;
     const use = lot.use;
-    const arch: Archetype = lot.landmark === 'pyramid' ? 'pyramid' : (lot.mega ? pickMega(r, src.kind, L, style) : null) ?? pickArchetype(r, prof.archetypes, style, tune, use, alien, L);
-    const archProf = prof.archetypes[arch] === undefined && BORROWED[arch] ? PROFILES[BORROWED[arch] as DistrictKind] : prof;
+    const arch: Archetype =
+      lot.landmark === 'pyramid' ? 'pyramid' : hive ? pickHive(r, src.kind, L) : ((lot.mega ? pickMega(r, src.kind, L, style) : null) ?? pickArchetype(r, prof.archetypes, style, tune, use, alien, L));
+    const hp = HIVE_H[src.kind];
+    const archProf = hive ? { ...prof, height: hp.h, spike: hp.spike } : prof.archetypes[arch] === undefined && BORROWED[arch] ? PROFILES[BORROWED[arch] as DistrictKind] : prof;
     const wallHex = prof.walls[r.int(prof.walls.length)] as number;
     let wall = hexToLinear(wallHex);
     // nightlife walls run darker so the neon carries the street
@@ -945,7 +837,7 @@ export function makeBuildings(z: Zoning, lots: readonly Lot[], rng: Rng, hmul: n
     const tiers: Tier[] = [];
     // tuned scale: 0.55x .. 1.8x the district's heights
     const useH = use === 'nightlife' ? 0.75 : use === 'civic' ? 0.9 : 1;
-    const c: Ctx = { r, style, tune, use, wall, palette, hmul: hmul * tuneMul(tune.scale, 1.8) * useH, structures, seed: r.next() };
+    const c: Ctx = { r, style, tune, use, wall, palette, hmul: hmul * tuneMul(tune.scale, 1.8) * useH, structures, seed: r.next(), ...(hive ? { hive: true } : {}) };
     BUILDERS[arch](lot, c, tiers, archProf);
     if (tiers.length === 0) continue;
     let height = 0;
