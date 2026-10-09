@@ -57,11 +57,13 @@ import {
   inverseSqrt,
 } from 'three/tsl';
 import { traa } from 'three/addons/tsl/display/TRAANode.js';
+import { ao as gtao } from 'three/addons/tsl/display/GTAONode.js';
 import { bloom } from 'three/addons/tsl/display/BloomNode.js';
 import { film } from 'three/addons/tsl/display/FilmNode.js';
 import { edgeChromaticAberration } from './chromatic';
 import { U, flicker, hazeLight, lightAt, rainRipples, reflectedLight, skyColor, waterNormal, zoneAt } from './tsl';
 import { HALO, HALO_N, LLU } from './locallights';
+import { SKYMAP, skyVisibility } from './skymap';
 
 /**
  * Tileable 3D value noise (two octaves), stored as a 2D atlas of 64 slices
@@ -165,6 +167,8 @@ export interface PostOptions {
   bloom: boolean;
   /** Screen-space reflections on wet ground and water (null = off). */
   ssr: { steps: number; scale: number } | null;
+  /** Ground-truth ambient occlusion (null = off): resolution scale and samples per pixel. */
+  ao: { scale: number; samples: number } | null;
 }
 
 export interface PostHandle {
@@ -221,6 +225,8 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     const T = float(1).toVar();
     const acc = vec3(0).toVar();
     const tPrev = float(0).toVar();
+    // looking toward the light from above, its shafts glow more (forward scattering)
+    const shaftPhase = mix(0.55, 1.8, smoothstep(0.1, 0.95, dot(dir, SKYMAP.dir))).toVar();
     Loop(steps, ({ i }) => {
       // toVar: TSL emits expressions where they are first used, so pin the step length
       // before tPrev is overwritten
@@ -240,7 +246,12 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       const Lr = hazeLight(p, smoothstep(LLU.near, LLU.far, t));
       // soft-saturate very bright pockets (a packed neon strip) so the haze glows, not whites out
       const Lsat = Lr.div(dot(Lr, vec3(0.3, 0.5, 0.2)).mul(0.25).add(1.0));
-      const Ls = Lsat.mul(scatter).add(tint.mul(fogAmb)).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.008));
+      // light shafts: light from above, cut by the towers and bridges over this point
+      const shaftL = vec3(0).toVar();
+      If(U.shaft.greaterThan(0.0), () => {
+        shaftL.assign(vec3(U.shaftColor).mul(skyVisibility(p)).mul(U.shaft).mul(shaftPhase));
+      });
+      const Ls = Lsat.mul(scatter).add(tint.mul(fogAmb)).add(horizon.mul(skyAmb)).add(vec3(U.fogColor).mul(0.008)).add(shaftL);
       const a = exp(dens.mul(dt).negate());
       acc.addAssign(Ls.mul(T).mul(a.oneMinus()));
       T.mulAssign(a);
@@ -321,6 +332,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     if (dbgMode === 'tmax') return vec4(vec3(tMax.div(3000.0)), 0.0);
     if (dbgMode === 'zone') return vec4(zoneAt(camPos.add(dir.mul(200.0))).rgb, 0.0);
     if (dbgMode === 'light') return vec4(lightAt(camPos.add(dir.mul(tMax.mul(0.5)))).mul(0.25), 0.0);
+    if (dbgMode === 'sky') return vec4(vec3(skyVisibility(camPos.add(dir.mul(min(tMax.mul(0.5), float(150.0)))))), 0.0);
     return vec4(acc, T);
   });
 
@@ -467,7 +479,31 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
     });
     reflected = (ssrScale >= 0.99 ? ssrTex.sample(screenUV).rgb : ssrUp()).mul(oneMinus(color.a).max(0.0));
   }
-  const composed = vec4(color.rgb.add(reflected).mul(fogT).add(fogC).add(glow.rgb), 1.0);
+  // ---------------------------------------------------------------- ambient occlusion
+  // Ground-truth AO (Jimenez et al. 2016) from the depth buffer: creases, setbacks, the
+  // foot of every wall and everything bolted onto one darken, so stacked and cluttered
+  // forms read as solid instead of flat. It darkens the light that falls on surfaces,
+  // not what glows: bright pixels (windows, signs, screens) are mostly emissive and keep
+  // their light. TRAA resolves the AO's per-frame rotation into a smooth result.
+  const aoStrength = uniform(opts.ao ? 0.85 : 0);
+  let lit = color.rgb;
+  let aoNode: ReturnType<typeof gtao> | null = null;
+  if (opts.ao) {
+    aoNode = gtao(depth, null, camera);
+    aoNode.resolutionScale = opts.ao.scale;
+    aoNode.samples.value = opts.ao.samples;
+    aoNode.radius.value = 3.0;
+    aoNode.thickness.value = 2.5;
+    aoNode.scale.value = 1.15;
+    aoNode.useTemporalFiltering = opts.traa;
+    const aoTex = aoNode.getTextureNode();
+    const aoV = aoTex.sample(screenUV).r;
+    const sky = step(0.9999, depth.sample(screenUV).r);
+    const glowing = smoothstep(0.35, 1.6, luminance(color.rgb));
+    const k = mix(float(1.0), aoV, aoStrength.mul(oneMinus(glowing)).mul(oneMinus(sky)));
+    lit = color.rgb.mul(k);
+  }
+  const composed = vec4(lit.add(reflected).mul(fogT).add(fogC).add(glow.rgb), 1.0);
 
   const dbg = new URLSearchParams(location.search).get('debug');
   if (dbg === 'fog') {
@@ -526,7 +562,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       frameN = (frameN + 1) % 1024;
       frameJ.value = frameN;
     },
-    u: { res, maxDist, scatter, fogAmb, skyAmb, noiseAmt, fogOn, haloGain, haloG, bloomOn, bloomStrength: bloomNode.strength, bloomRadius: bloomNode.radius, bloomThreshold: bloomNode.threshold, bloomKnee: bloomNode.smoothWidth, tint, lift, sat, contrast, chroma, vigInt, grain },
+    u: { res, maxDist, scatter, fogAmb, skyAmb, noiseAmt, fogOn, haloGain, haloG, aoStrength, ...(aoNode ? { aoRadius: aoNode.radius, aoThickness: aoNode.thickness, aoScale: aoNode.scale } : {}), bloomOn, bloomStrength: bloomNode.strength, bloomRadius: bloomNode.radius, bloomThreshold: bloomNode.threshold, bloomKnee: bloomNode.smoothWidth, tint, lift, sat, contrast, chroma, vigInt, grain },
   };
 }
 

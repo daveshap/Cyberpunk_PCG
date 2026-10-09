@@ -86,6 +86,10 @@ export const U = {
    * instead of cameraPosition.
    */
   camPos: uniform(new THREE.Vector3()),
+  /** Light shafts: how much light comes down from above into the haze (0 = none; the hive). */
+  shaft: uniform(0),
+  /** Colour of the light from above. */
+  shaftColor: uniform(new THREE.Color(0.3, 0.36, 0.48)),
 };
 
 /**
