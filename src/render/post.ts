@@ -140,6 +140,9 @@ function makeNoiseAtlas(): THREE.DataTexture {
 }
 
 /** Repeating 3D noise lookup in the atlas (p in noise periods). */
+/** One noise atlas for every post chain (quality changes rebuild the chain). */
+let noiseAtlas: THREE.DataTexture | null = null;
+
 function noiseSampler(tex: THREE.DataTexture) {
   const node = texture(tex);
   return Fn(([p]) => {
@@ -176,6 +179,26 @@ export interface PostHandle {
   render: () => void;
   u: Record<string, { value: unknown }>;
   frame: () => void;
+  /**
+   * Free the chain's passes, render targets and materials. Quality changes build a new
+   * chain; without this every change kept the old one's render targets (the scene's
+   * colour, glow, velocity and depth, TRAA history, bloom, AO, haze and SSR) alive.
+   */
+  dispose: () => void;
+}
+
+/** Dispose post nodes and the textures convertToTexture() made for their inputs. */
+function disposeNodes(nodes: Array<{ dispose?: () => void } | null | undefined>): void {
+  const seen = new Set<object>();
+  const free = (n: { dispose?: () => void; isRTTNode?: boolean } | null | undefined): void => {
+    if (!n || seen.has(n) || typeof n.dispose !== 'function') return;
+    seen.add(n);
+    // inputs wrapped by convertToTexture() (TRAA's beauty, bloom's and the aberration's input)
+    const m = n as { beautyNode?: { isRTTNode?: boolean }; inputNode?: { isRTTNode?: boolean }; textureNode?: { isRTTNode?: boolean } };
+    for (const c of [m.beautyNode, m.inputNode, m.textureNode]) if (c && c.isRTTNode) free(c as never);
+    n.dispose();
+  };
+  for (const n of nodes) free(n as never);
 }
 
 export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, camera: THREE.PerspectiveCamera, opts: PostOptions): PostHandle {
@@ -208,7 +231,8 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
   const haloG = uniform(0.5);
   const fogOn = uniform(1);
   const res = uniform(new THREE.Vector2(1920, 1080));
-  const noise3 = noiseSampler(makeNoiseAtlas());
+  noiseAtlas ??= makeNoiseAtlas();
+  const noise3 = noiseSampler(noiseAtlas);
 
   const steps = opts.fogSteps;
   const haze = Fn(() => {
@@ -370,6 +394,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
   // to the sky and the light volume. A per-pixel jitter of the normal, resolved by
   // TRAA, stretches the reflections into streaks the way wet asphalt does.
   let reflected = vec3(0);
+  let ssrRtt: { dispose?: () => void } | null = null;
   U.ssrOn.value = opts.ssr ? 1 : 0;
   if (opts.ssr) {
     const camView = uniform(camera.matrixWorldInverse);
@@ -454,6 +479,7 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       return out;
     });
     const ssrTex = rtt(ssrPass(), null, null, { type: THREE.HalfFloatType, resolutionScale: opts.ssr.scale });
+    ssrRtt = ssrTex;
     const ssrScale = opts.ssr.scale;
     // depth-aware upsample that only trusts taps where reflections were computed
     const ssrUp = Fn(() => {
@@ -513,14 +539,20 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       (U.res.value as THREE.Vector2).copy(res.value);
       camera.updateMatrixWorld();
       camPos.value.setFromMatrixPosition(camera.matrixWorld);
-    }, u: {} };
+    }, u: {}, dispose: () => {
+      disposeNodes([hazeTex, ssrRtt, aoNode, scenePass]);
+      pipeline.dispose();
+    } };
   }
   if (dbg === 'depth') {
     // raw view distance / 3000 m, no tone mapping (for depth-binned measurements)
     const vpD = getViewPosition(screenUV, depth.sample(screenUV).r, camProjInv);
     pipeline.outputNode = vec4(vec3(length(vpD).div(3000.0)), 1.0);
     pipeline.outputColorTransform = false;
-    return { pipeline, render: () => pipeline.render(), frame: () => camera.updateMatrixWorld(), u: {} };
+    return { pipeline, render: () => pipeline.render(), frame: () => camera.updateMatrixWorld(), u: {}, dispose: () => {
+      disposeNodes([hazeTex, ssrRtt, aoNode, scenePass]);
+      pipeline.dispose();
+    } };
   }
   const aa = opts.traa ? traa(composed, depth, vel, camera) : composed;
 
@@ -561,6 +593,10 @@ export function createPost(renderer: THREE.WebGPURenderer, scene: THREE.Scene, c
       camPos.value.setFromMatrixPosition(camera.matrixWorld);
       frameN = (frameN + 1) % 1024;
       frameJ.value = frameN;
+    },
+    dispose: () => {
+      disposeNodes([ca, bloomNode, opts.traa ? aa : null, hazeTex, ssrRtt, aoNode, scenePass]);
+      pipeline.dispose();
     },
     u: { res, maxDist, scatter, fogAmb, skyAmb, noiseAmt, fogOn, haloGain, haloG, aoStrength, ...(aoNode ? { aoRadius: aoNode.radius, aoThickness: aoNode.thickness, aoScale: aoNode.scale } : {}), bloomOn, bloomStrength: bloomNode.strength, bloomRadius: bloomNode.radius, bloomThreshold: bloomNode.threshold, bloomKnee: bloomNode.smoothWidth, tint, lift, sat, contrast, chroma, vigInt, grain },
   };

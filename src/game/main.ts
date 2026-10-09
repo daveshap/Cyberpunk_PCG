@@ -82,6 +82,8 @@ async function main(): Promise<void> {
   await renderer.init();
   const backend = (renderer.backend as unknown as { isWebGPUBackend?: boolean }).isWebGPUBackend ? 'WebGPU' : 'WebGL2';
   let quality = q.get('q') ?? (backend === 'WebGPU' ? 'high' : 'medium');
+  // ?noguard keeps the quality where it is (the frame-rate guard below lowers it when frames are slow)
+  const noGuard = q.has('noguard');
   if (!QUALITY[quality]) quality = 'medium';
 
   const scene = new THREE.Scene();
@@ -146,6 +148,8 @@ async function main(): Promise<void> {
     LLU.halos.value = Q.local.halos;
     const ssr = q.has('nossr') ? null : q.has('ssr') ? (Q.ssr ?? { steps: 22, scale: 0.5 }) : Q.ssr;
     const aoQ = q.has('noao') ? null : Q.ao;
+    // free the old chain's render targets before building the new one
+    (post as PostHandle | undefined)?.dispose();
     post = createPost(renderer, scene, camera, { traa: Q.traa && !q.has('notaa'), fogScale: Q.fogScale, fogSteps: Q.fogSteps, bloom: true, ssr, ao: aoQ });
     applyT();
   };
@@ -385,7 +389,7 @@ async function main(): Promise<void> {
       fps = fpsN / fpsAcc;
       fpsAcc = 0;
       fpsN = 0;
-      if (!still && quality !== 'low' && performance.now() - bootAt > 10000) {
+      if (!still && !noGuard && quality !== 'low' && performance.now() - bootAt > 10000) {
         slowFor = fps < 22 ? slowFor + 0.5 : 0;
         if (slowFor >= 4) {
           slowFor = 0;
