@@ -12,7 +12,7 @@ import { Rng } from './rng';
 const MEGA_P: Record<DistrictKind, number> = { corporate: 0.5, megablock: 0.36, luxury: 0.2, jpmarket: 0.04, cnmarket: 0.05, industrial: 0.08, decayed: 0.05 };
 const MEGA_USE: Record<LandUse, number> = { residential: 1, commercial: 1, civic: 1.2, nightlife: 0, industrial: 0.5, green: 0 };
 
-export function makeLots(blocks: readonly Block[], districts: readonly District[], rng: Rng, density: number, alien = 0.5): Lot[] {
+export function makeLots(blocks: readonly Block[], districts: readonly District[], rng: Rng, density: number, alien = 0.5, hive = false): Lot[] {
   const lots: Lot[] = [];
   for (const b of blocks) {
     if (b.open !== 'none') continue;
@@ -24,7 +24,8 @@ export function makeLots(blocks: readonly Block[], districts: readonly District[
     const bw = b.rect.x1 - b.rect.x0;
     const bd = b.rect.z1 - b.rect.z0;
     const pMega = MEGA_P[d.kind] * MEGA_USE[b.use] * Math.min(2.2, alien * 2) * tuneMul(d.tune.scale, 1.4);
-    const mega = !b.landmark && Math.min(bw, bd) >= 44 && rm.chance(Math.min(0.85, pMega));
+    // in the hive every block is one megastructure
+    const mega = !b.landmark && Math.min(bw, bd) >= 44 && (hive || rm.chance(Math.min(0.85, pMega)));
     // tuned scale widens frontages, tuned density narrows them
     const k = (1 / Math.sqrt(density)) * tuneMul(d.tune.scale, 1.5) / tuneMul(d.tune.density, 1.35);
     const lmin = p.lot[0] * k;

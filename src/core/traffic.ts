@@ -8,6 +8,8 @@ import type { Transit } from './transit';
 import { Rng } from './rng';
 
 const BANDS = [26, 42, 64, 96, 140, 200];
+/** The hive stacks its traffic the whole way up the canyons. */
+export const HIVE_BANDS = [34, 70, 120, 185, 260, 350, 460, 590, 740, 910, 1100, 1320];
 
 export function makeLanes(z: Zoning, streets: readonly Street[], rng: Rng, transit?: Transit): { lanes: AirLane[]; highways: Highway[] } {
   // arterials carrying the metro viaduct keep their lowest air lane clear of it
@@ -16,21 +18,24 @@ export function makeLanes(z: Zoning, streets: readonly Street[], rng: Rng, trans
   const lanes: AirLane[] = [];
   const highways: Highway[] = [];
   for (const st of streets) {
-    if (st.kind !== 'arterial' && st.kind !== 'highway') continue;
+    // the hive also flies its lower canyons, between the blocks
+    const local = z.hive && st.kind === 'local';
+    if (st.kind !== 'arterial' && st.kind !== 'highway' && !local) continue;
     const r = rng.fork('lane' + st.key);
     const len = st.hi - st.lo;
     if (len < 200) continue;
     if (st.kind === 'highway') {
       highways.push({ axis: st.axis, pos: st.pos, lo: st.lo, hi: st.hi, y: r.range(17, 21), width: 22, span: 42 });
     }
-    // a few altitude bands per arterial, two directions each
-    const nb = st.kind === 'highway' ? 3 : r.intRange(1, 3);
+    // a few altitude bands per arterial, two directions each (the hive: many, stacked)
+    const bands = z.hive ? HIVE_BANDS : BANDS;
+    const nb = z.hive ? (local ? r.intRange(1, 3) : r.intRange(5, 8)) : st.kind === 'highway' ? 3 : r.intRange(1, 3);
     const used = new Set<number>();
     for (let k = 0; k < nb; k++) {
-      const bi = r.int(BANDS.length);
+      const bi = r.int(local ? 7 : bands.length);
       if (used.has(bi) || (bi === 0 && onMetro(st))) continue;
       used.add(bi);
-      const y = (BANDS[bi] as number) + r.range(-3, 3);
+      const y = (bands[bi] as number) + r.range(-3, 3);
       for (const dir of [1, -1]) {
         const off = dir * r.range(5, 9);
         const pts: Vec3[] =
@@ -48,7 +53,7 @@ export function makeLanes(z: Zoning, streets: readonly Street[], rng: Rng, trans
           [0.2, 0.9, 1],
           [1, 0.75, 0.2],
         ]) as RGB) : [1, 0.08, 0.04];
-        lanes.push({ pts, speed: r.range(16, 34) * (y > 100 ? 1.4 : 1), count: Math.max(2, Math.round(len / r.range(45, 90))), dir, col, seed: r.next() });
+        lanes.push({ pts, speed: r.range(16, 34) * (y > 100 ? 1.4 : 1) * (y > 400 ? 1.3 : 1), count: Math.max(2, Math.round(len / r.range(45, 90))), dir, col, seed: r.next() });
       }
     }
     // ground traffic on the highway deck
@@ -73,6 +78,5 @@ export function makeLanes(z: Zoning, streets: readonly Street[], rng: Rng, trans
       }
     }
   }
-  void z;
   return { lanes, highways };
 }

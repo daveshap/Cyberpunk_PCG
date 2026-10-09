@@ -383,13 +383,13 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
     const topWalls = wallsOf(top, top.top ?? top.poly);
     if (signs.length < SIGN_CAP && topWalls.length > 0) {
       const tw = topWalls.reduce((m, w) => (w.len > m.len ? w : m), topWalls[0] as Wall);
-      if ((d.kind === 'corporate' || b.archetype === 'spire' || b.archetype === 'needle') && !top.top && b.height > 90 && r.chance(0.55 + 0.3 * s.edge)) {
+      if ((d.kind === 'corporate' || b.archetype === 'spire' || b.archetype === 'needle') && !top.top && top.poly.length <= 8 && b.height > 90 && r.chance(0.55 + 0.3 * s.edge)) {
         // giant logo near the crown, on the two widest faces
         const faces = topWalls.slice().sort((p, q) => q.len - p.len).slice(0, 2);
         const logoText = roofWord(r);
         const c = col(r.int(3));
         for (const f of faces) {
-          const sw = Math.min(f.len * 0.7, 36);
+          const sw = Math.min(f.len * 0.7, z.hive ? 130 : 36);
           const sh = sw * 0.32;
           const cx = (f.a[0] + f.b[0]) / 2;
           const cz = (f.a[1] + f.b[1]) / 2;
@@ -473,7 +473,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           .sort((a, c) => c.len - a.len)[0];
         if (f) {
           const span = t.y1 - t.y0;
-          const sw = Math.min(f.len * 0.84, 66);
+          const sw = Math.min(f.len * 0.84, z.hive ? 230 : 66);
           const portrait = rm.chance(0.6);
           const sh = Math.min(span * 0.75, portrait ? sw * rm.range(1.4, 2.3) : sw * rm.range(0.5, 0.72));
           if (sh > 16) {
@@ -636,6 +636,8 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
 
     // ---- roof kits
     for (const t of b.tiers) {
+      // inside a shell (a tier that carries on into the one above) there is no roof
+      if (t.seam) continue;
       if (t.y1 < b.height - 0.1 && !(t.roof === 'flat' && r.chance(0.35))) continue;
       const cap = t.top ?? t.poly;
       // round footprints (discs) use their inscribed square so kits stay on the roof
@@ -673,10 +675,12 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
           kit('beacon', p[0] - Math.sign(p[0] - (bx0 + bx1) / 2) * 0.8, y + 0.4, p[1] - Math.sign(p[1] - (bz0 + bz1) / 2) * 0.8, 0, 0.35, 0.35, 0.35, red, 6, r.next());
         }
       }
-      if (b.archetype === 'needle' && t.y1 >= b.height - 0.1) {
+      if ((b.archetype === 'needle' || b.archetype === 'prism' || b.archetype === 'egg') && t.y1 >= b.height - 0.1) {
         const cx = (bx0 + bx1) / 2;
         const cz = (bz0 + bz1) / 2;
-        kit('antenna', cx, y, cz, 0, 0.6, r.range(30, 60), 0.6, [0.4, 0.4, 0.42], 0, r.next());
+        // a faceted taper ends in a spire; a lathed shell carries a short mast on its lantern
+        const h = b.archetype === 'prism' ? clamp(b.height * r.range(0.14, 0.24), 25, 120) : b.archetype === 'egg' ? r.range(8, 22) : r.range(30, 60);
+        kit('antenna', cx, y, cz, 0, b.archetype === 'prism' ? 0.9 : 0.6, h, b.archetype === 'prism' ? 0.9 : 0.6, [0.4, 0.4, 0.42], 0, r.next());
       }
     }
 
@@ -685,11 +689,32 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
       const f = t.facade;
       if (t.y1 - t.y0 < 6) continue;
       const lc = f.warm > 0.5 ? WARM : COOL;
-      const band = 45;
+      // (a kilometre tower bakes its window light in taller bands)
+      const band = Math.max(45, b.height / 24);
       for (let y = t.y0; y < t.y1; y += band) {
         const h = Math.min(band, t.y1 - y);
         // a tapered tier's walls lean in: take the outline at the band's middle
-        for (const w of wallsOf(t, polyAt(t, y + h / 2))) {
+        const ring = polyAt(t, y + h / 2);
+        if (t.smooth || ring.length > 10) {
+          // a curved (or many-sided) shell: its facets are narrow, so light it in arcs
+          const arcs = 6;
+          const n = ring.length;
+          const [rcx, rcz] = [ring.reduce((a2, p) => a2 + p[0], 0) / n, ring.reduce((a2, p) => a2 + p[1], 0) / n];
+          let per = 0;
+          for (let i = 0; i < n; i++) per += Math.hypot((ring[(i + 1) % n] as Vec2)[0] - (ring[i] as Vec2)[0], (ring[(i + 1) % n] as Vec2)[1] - (ring[i] as Vec2)[1]);
+          for (let k = 0; k < arcs; k++) {
+            const p = ring[Math.floor(((k + 0.5) / arcs) * n) % n] as Vec2;
+            const dx = p[0] - rcx;
+            const dz = p[1] - rcz;
+            const dl = Math.hypot(dx, dz) || 1;
+            const len = per / arcs;
+            const kk = f.lit * f.win * len * h * 0.0016;
+            if (kk < 0.05) continue;
+            emit(p[0] + (dx / dl) * 7, y + h / 2, p[1] + (dz / dl) * 7, lc, kk, clamp(Math.max(len, h) * 0.6, 12, 55), 'window');
+          }
+          continue;
+        }
+        for (const w of wallsOf(t, ring)) {
           if (w.len < 8) continue;
           const k = f.lit * f.win * w.len * h * 0.0016;
           if (k < 0.05) continue;
@@ -699,7 +724,7 @@ export function dress(z: Zoning, buildings: readonly Building[], lots: readonly 
         }
       }
       const cap = t.top ?? t.poly;
-      if (f.strips > 0.35 && t.y1 > 40) {
+      if (f.strips > 0.35 && t.y1 > 40 && !t.seam) {
         const cx = cap.reduce((a, p) => a + p[0], 0) / cap.length;
         const cz = cap.reduce((a, p) => a + p[1], 0) / cap.length;
         emit(cx, t.y1, cz, f.accent, f.strips * 2.5, 40);
