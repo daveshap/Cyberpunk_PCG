@@ -107,7 +107,12 @@ geometry, textures and lighting are all generated.
     into a half-float height map, and the haze adds `U.shaftColor * U.shaft` where `skyVisibility()` finds the sky
     (tested at the point and three points up toward the light). `U.shaft` is 0 in the coastal city (the branch is
     skipped) and set per world in `main.ts` with the hive's haze (`U.fogFalloff`, the fog base) and the light
-    volume's height (`HMAX_HIVE` in `lightvolume.ts`).
+    volume's height (`HMAX_HIVE` in `lightvolume.ts`). Changing quality (the menu or the frame-rate guard)
+    rebuilds the whole chain, and `makePost()` disposes the old one first (`PostHandle.dispose()`), so add any
+    new pass or render target to that list. On WebGPU, with TRAA on, a new chain's first few frames come out
+    nearly black (under a dozen frames, a fraction of a second at real frame rates). On the software renderer the
+    guard steps quality down within seconds, so tests that capture after a switch pass `?noguard` and render a
+    dozen frames first.
 
 ## TSL gotchas
 

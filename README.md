@@ -266,11 +266,12 @@ Walled city, Corporate, Rust belt, Gilded coast. The other presets keep the curr
 
 `seed`, `preset` (e.g. `night-strip`), `world=hive`, `size`, `alien`, `q` (`low|medium|high|ultra`), `fov` (lens, vertical degrees), `gl` (force WebGL2),
 `ssr` / `nossr`, `noao`, `auto` (start in guided flight), `fog`, `rain`, `neon`, `exposure`, `dry`, `tm=agx`, and for
-screenshots and debugging: `still`, `nohud`, `notaa`, `debug=fog|depth`, `hdbg=tmax|zone|light`,
-`hide=name,prefix*`, `holot` (freeze the holograms at a clock time), `screen=N` (force every LED screen to one
-scene), `lightgain` (scale the baked city light), `fill` (a flat white fill light to inspect materials), and
-`t.<dial>=value` to set a lighting dial by name (`t.halo` for the glow's strength, `t.halos` for how many lights
-glow, `t.localgain`, `t.fogDensity`, `t.aoStrength`, `t.shaft` for the light shafts, `t.bloomStrength`...).
+screenshots and debugging: `still`, `nohud`, `notaa`, `noguard` (keep the quality level when frames are slow),
+`debug=fog|depth`, `hdbg=tmax|zone|light`, `hide=name,prefix*`, `holot` (freeze the holograms at a clock time),
+`screen=N` (force every LED screen to one scene), `lightgain` (scale the baked city light), `fill` (a flat white
+fill light to inspect materials), and `t.<dial>=value` to set a lighting dial by name (`t.halo` for the glow's
+strength, `t.halos` for how many lights glow, `t.localgain`, `t.fogDensity`, `t.aoStrength`, `t.shaft` for the
+light shafts, `t.bloomStrength`...).
 `hdbg=sky` shows where the air sees the sky.
 
 ## How it is built
