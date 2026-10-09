@@ -37,12 +37,14 @@ interface QualitySpec {
   ssr: { steps: number; scale: number } | null;
   /** Local lights: reach from the camera (0 = off), street lights per cell, halos per frame. */
   local: { far: number; k: number; halos: number };
+  /** Ambient occlusion: resolution scale and samples (null = off). */
+  ao: { scale: number; samples: number } | null;
 }
 const QUALITY: Record<string, QualitySpec> = {
-  low: { ratio: 0.75, traa: false, fogScale: 0.33, fogSteps: 8, detail: 260, ssr: null, local: { far: 0, k: 0, halos: 0 } },
-  medium: { ratio: 1, traa: true, fogScale: 0.5, fogSteps: 10, detail: 340, ssr: null, local: { far: 420, k: 6, halos: 16 } },
-  high: { ratio: 1.25, traa: true, fogScale: 0.5, fogSteps: 14, detail: 420, ssr: { steps: 22, scale: 0.5 }, local: { far: 760, k: 12, halos: 40 } },
-  ultra: { ratio: 2, traa: true, fogScale: 0.75, fogSteps: 18, detail: 600, ssr: { steps: 30, scale: 0.5 }, local: { far: 1000, k: 12, halos: 40 } },
+  low: { ratio: 0.75, traa: false, fogScale: 0.33, fogSteps: 8, detail: 260, ssr: null, local: { far: 0, k: 0, halos: 0 }, ao: null },
+  medium: { ratio: 1, traa: true, fogScale: 0.5, fogSteps: 10, detail: 340, ssr: null, local: { far: 420, k: 6, halos: 16 }, ao: { scale: 0.5, samples: 8 } },
+  high: { ratio: 1.25, traa: true, fogScale: 0.5, fogSteps: 14, detail: 420, ssr: { steps: 22, scale: 0.5 }, local: { far: 760, k: 12, halos: 40 }, ao: { scale: 0.5, samples: 12 } },
+  ultra: { ratio: 2, traa: true, fogScale: 0.75, fogSteps: 18, detail: 600, ssr: { steps: 30, scale: 0.5 }, local: { far: 1000, k: 12, halos: 40 }, ao: { scale: 0.75, samples: 16 } },
 };
 
 /**
@@ -67,6 +69,7 @@ async function main(): Promise<void> {
     ...(preset?.dials ?? {}),
     ...(q.get('size') ? { size: Number(q.get('size')) } : {}),
     ...(q.get('alien') ? { alien: Number(q.get('alien')) } : {}),
+    ...(q.get('world') === 'hive' ? { world: 'hive' as const } : {}),
   });
 
   const canvas = document.createElement('canvas');
@@ -100,8 +103,11 @@ async function main(): Promise<void> {
   scene.add(car.group);
 
   const live: LiveSettings = { fog: Number(q.get('fog') ?? 1), rain: q.has('dry') ? 0 : Number(q.get('rain') ?? 0.6), neon: Number(q.get('neon') ?? 1), traffic: 1, exposure: Number(q.get('exposure') ?? 1) };
+  // the hive's air is a deep, tall murk: it thins out slowly with height, so every level
+  // of the canyons sinks into it (scale height about 1.2 km instead of 220 m)
+  let fogBase = FOG_BASE;
   const applyLive = (s: LiveSettings): void => {
-    U.fogDensity.value = FOG_BASE * s.fog;
+    U.fogDensity.value = fogBase * s.fog;
     U.rain.value = s.rain;
     U.wet.value = Math.min(1, 0.35 + s.rain);
     U.neon.value = s.neon;
@@ -139,8 +145,13 @@ async function main(): Promise<void> {
     LLU.kMax.value = Q.local.k;
     LLU.halos.value = Q.local.halos;
     const ssr = q.has('nossr') ? null : q.has('ssr') ? (Q.ssr ?? { steps: 22, scale: 0.5 }) : Q.ssr;
-    post = createPost(renderer, scene, camera, { traa: Q.traa && !q.has('notaa'), fogScale: Q.fogScale, fogSteps: Q.fogSteps, bloom: true, ssr });
-    // debug: ?t.halo=150&t.localgain=0.5 sets dials by name (see tunable)
+    const aoQ = q.has('noao') ? null : Q.ao;
+    post = createPost(renderer, scene, camera, { traa: Q.traa && !q.has('notaa'), fogScale: Q.fogScale, fogSteps: Q.fogSteps, bloom: true, ssr, ao: aoQ });
+    applyT();
+  };
+  // debug: ?t.halo=150&t.localgain=0.5 sets dials by name (see tunable); applied again
+  // after every build, which sets the world's own haze and shafts
+  const applyT = (): void => {
     for (const [k, v] of q) {
       if (!k.startsWith('t.')) continue;
       const u = tunable(k.slice(2));
@@ -191,6 +202,12 @@ async function main(): Promise<void> {
     await nextFrame();
     const t0 = performance.now();
     spec = generateCity({ seed, dials }, () => performance.now());
+    const hive = spec.dials.world === 'hive';
+    fogBase = hive ? 0.0019 : FOG_BASE;
+    U.fogFalloff.value = hive ? 0.0006 : 0.0045;
+    // light from the upper levels comes down the hive's canyons in shafts
+    U.shaft.value = hive ? 0.18 : 0;
+    applyT();
     if (city) {
       scene.remove(city.root);
       city.dispose();
